@@ -12,6 +12,16 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   relay-data:
