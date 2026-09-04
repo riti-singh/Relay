@@ -1,6 +1,7 @@
 from functools import lru_cache
 
-from relay.agent.planner import DeterministicPlanner
+from relay.agent.planner import AgentModel, DeterministicPlanner, OpenAICompatibleAgentModel
+from relay.agent.runtime import AgentRuntime
 from relay.config import get_settings
 from relay.network.simulator import NetworkSimulator
 from relay.repositories.incidents import SQLiteIncidentRepository
@@ -15,6 +16,23 @@ def get_simulator() -> NetworkSimulator:
 
 @lru_cache
 def get_incident_service() -> IncidentService:
-    repository = SQLiteIncidentRepository(get_settings().database_path)
+    settings = get_settings()
+    repository = SQLiteIncidentRepository(settings.database_path)
     simulator = get_simulator()
-    return IncidentService(repository, build_registry(simulator), DeterministicPlanner())
+    registry = build_registry(simulator, settings.max_tool_retries)
+    deterministic = DeterministicPlanner()
+    model: AgentModel = deterministic
+    if settings.agent_provider != "deterministic" and settings.agent_api_key:
+        model = OpenAICompatibleAgentModel(
+            settings.agent_api_key,
+            settings.agent_model,
+            settings.agent_base_url,
+            settings.agent_timeout_seconds,
+        )
+    runtime = AgentRuntime(
+        registry,
+        model,
+        settings.max_investigation_steps,
+        settings.max_repeated_tool_calls,
+    )
+    return IncidentService(repository, registry, deterministic, runtime)

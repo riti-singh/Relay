@@ -1,157 +1,141 @@
 # Relay — Agentic Network Incident Response
 
-Relay is a backend foundation for investigating and safely remediating network incidents. It models an incident as a durable aggregate, exposes deterministic diagnostic tools, records structured evidence, and enforces a human approval boundary before any network mutation.
+Relay is a typed Python/FastAPI system for bounded, tool-driven network investigation and human-approved remediation. Milestone 2 adds a provider-independent agent runtime while retaining the deterministic Milestone 1 workflow and a no-key deterministic planner for tests and local demos.
 
-Milestone 1 deliberately uses a deterministic planner and simulator. It proves the workflow and domain boundaries without presenting scripted behavior as AI or requiring an external model.
+Relay stores explicit operational artifacts only: plans, model decisions, tool calls, structured observations, evidence, hypotheses and their revisions, approvals, remediation attempts, verification, summaries, and event history. It never stores or exposes hidden chain-of-thought. Models cannot invoke a shell or arbitrary code; they can only select registered tools with validated Pydantic arguments.
 
-## Architecture
+## Implemented architecture
 
-```text
-FastAPI routes
-    │
-IncidentService ── InvestigationPlanner (deterministic today)
-    │                         │
-SQLite repository       planned typed calls
-    │                         │
-incident aggregate      ToolRegistry ── NetworkSimulator
+```mermaid
+flowchart TD
+    API[FastAPI / CLI] --> S[IncidentService]
+    S --> R[Bounded AgentRuntime]
+    R --> C[Compacted InvestigationContext]
+    C --> M{AgentModel}
+    M -->|no key / CI| D[Deterministic planner]
+    M -->|configured| L[OpenAI-compatible provider adapter]
+    R --> V[Decision validation]
+    V --> T[Typed ToolRegistry]
+    T --> N[Deterministic NetworkSimulator]
+    S --> DB[(SQLite incident aggregate)]
+    T -->|all writes| A[Exact-action approval guard]
+    A --> X[Remediation]
+    X --> Q[Explicit verification]
+    Q -->|failed| R
+    Q -->|passed| Z[Resolved]
 ```
 
-The code is organized by responsibility:
+The domain and API contain no provider SDK types. `AgentModel.decide_next_action(InvestigationContext) -> AgentDecision` is async, easy to script in tests, and produces one of six structured actions: run a tool, request evidence, update a hypothesis, propose remediation, declare resolved, or declare blocked. Provider timeouts and malformed responses block a run safely; deterministic fallback remains the default.
 
-- `api`: transport schemas, routes, and dependency composition
-- `domain`: typed incident, topology, evidence, hypothesis, remediation, and run models
-- `services`: use cases and state transitions, independent of FastAPI
-- `repositories`: parameterized SQLite persistence
-- `network`: deterministic graph-based topology and connectivity behavior
-- `tools`: typed inputs, registry, diagnostics, and guarded mutation
-- `agent`: replaceable investigation-planner interface and current deterministic implementation
+The runtime reloads the persisted incident, builds a bounded context using recent calls/evidence plus the running summary, validates each decision, and stops at remediation, resolution, blocked status, or the configured step limit. Identical calls are bounded. Tool validation, unavailable tools, retryable timeouts, retry counts, duration, error category, and timestamps are observable. A run ID ties actions and structured events together.
 
-SQLite stores each incident aggregate as validated JSON alongside queryable identity, status, and timestamps. This keeps the first schema compact while persisting plans, runs, calls, evidence, hypotheses, remediation, approval, and verification as one consistent unit.
-
-## Current capabilities
-
-- Create, list, and inspect incidents.
-- Inspect a five-device topology spanning two branches, two core routers, and a service node.
-- Run typed `ping`, `traceroute`, topology, interface, route, log, and configuration tools.
-- Record each call and successful observation as linked evidence.
-- Diagnose the seeded `branch-03` failure, form a confidence-scored hypothesis, and propose remediation.
-- Stop in `AWAITING_APPROVAL` without changing network state.
-- After explicit approval, enable the failed interface and verify recovery with ping and traceroute.
-- Persist the full incident and investigation history across application restarts.
-
-## Seeded incident lifecycle
-
-The simulator starts with `core-router-02/eth1` administratively disabled. That interface terminates the `branch-03` uplink, so `branch-03` cannot reach `payments-api`; `branch-01` remains a healthy control path.
-
-The deterministic planner does not receive the root cause as an answer. It requests topology, ping, traceroute, source routes, suspect interface state, logs, and configuration through the same typed tool boundary available to future planners. The evidence supports a hypothesis that the disabled interface isolates the branch. Relay proposes enabling it, pauses, then executes and verifies only after approval.
-
-State progression:
+## Investigation and hypothesis lifecycle
 
 ```text
 OPEN → INVESTIGATING → AWAITING_APPROVAL → REMEDIATING → VERIFYING → RESOLVED
+                         ↑                                  │
+                         └──── continue investigation ──────┘
 ```
 
-Invalid transitions are rejected explicitly.
+Hypotheses are durable first-class objects with suspected component, confidence, supporting and contradicting evidence IDs, `ACTIVE`/`REJECTED`/`CONFIRMED` status, and revision history. Long runs retain a concise investigation summary instead of passing the database or unbounded history to a model.
 
-## Safety model
+Every tool is classified `READ_ONLY`, `LOW_RISK_WRITE`, or `HIGH_RISK_WRITE`. Read-only investigation is autonomous. Every write is blocked centrally until approval names the incident ID, remediation ID, approver, exact tool, and exact arguments. A SHA-256 fingerprint binds those values, so changed arguments, another remediation, or another incident invalidate approval. Approval and execution status are persisted.
 
-Diagnostic tools are read-only. `set_interface_admin_state` is marked state-changing and the central registry refuses to execute it unless the caller supplies `ApprovalState.APPROVED`. The service sets that value only through the approval use case. Tests prove both that an unapproved call raises an approval error and that simulator state remains unchanged.
+Remediation never implies recovery. Relay verifies with scenario-relevant ping, traceroute, TCP, DNS, or loss checks. Failed verification is recorded and returns the incident to `INVESTIGATING` within the remaining operator-driven lifecycle.
 
-Only explicit operational artifacts are retained: plans, tool inputs/results, evidence, observations, hypotheses, confidence, decisions, and verification. Relay does not persist or expose hidden chain-of-thought.
+## Deterministic scenarios and tools
 
-## Running Relay
+Six reproducible scenarios have known evaluation expectations without placing the answer in `InvestigationContext`:
 
-### Docker Compose (recommended)
+| Scenario | Fault | Primary diagnostics | Approved remediation |
+| --- | --- | --- | --- |
+| `interface-disabled` | disabled branch uplink | ping, trace, interface, logs/config | enable interface |
+| `incorrect-route` | wrong static next hop | trace, route table | restore route |
+| `acl-block` | TCP/443 deny while ping works | TCP test, ACL rules | disable bad deny rule |
+| `dns-failure` | incorrect service record | ping and DNS resolution | restore DNS record |
+| `degraded-link` | high latency and packet loss | link metrics and packet loss | repair link |
+| `config-drift` | forwarding differs from baseline | config comparison/change history | restore baseline |
 
-```bash
-docker compose up --build
-```
+Read tools include `ping`, `traceroute`, `resolve_dns`, `test_tcp_connection`, `get_acl_rules`, `get_link_metrics`, `get_packet_loss`, `compare_config_to_baseline`, recent changes, routes, interfaces, logs, config, and topology. Mutation tools are purpose-built and typed; there is no generic command executor.
 
-The API is available at `http://localhost:8000`; interactive OpenAPI documentation is at `http://localhost:8000/docs`. The named `relay-data` volume preserves SQLite data when the container restarts. Simulator state is intentionally re-seeded on process startup for Milestone 1, so approved topology mutations do not survive a process restart; incident history does.
+## Run locally
 
-### Local Python 3.12+
+Python 3.12+:
 
 ```bash
 make install
 make run
 ```
 
-Copy `.env.example` to `.env` to override the default database path if needed.
+Or use `docker compose up --build`. The API is at `http://localhost:8000` and OpenAPI at `/docs`.
 
-## Complete API workflow
+Relay needs no API key. Defaults in `.env.example` select the deterministic planner. For an OpenAI-compatible Responses API, set:
 
-Create the seeded scenario:
-
-```bash
-curl -sS -X POST http://localhost:8000/incidents \
-  -H 'content-type: application/json' \
-  -d '{
-    "title": "Branch connectivity failure",
-    "description": "Users at branch-03 cannot reach the payments API.",
-    "source_device": "branch-03",
-    "destination_device": "payments-api"
-  }'
+```dotenv
+RELAY_AGENT_PROVIDER=openai-compatible
+RELAY_AGENT_API_KEY=your-secret
+RELAY_AGENT_MODEL=gpt-5-mini
+RELAY_AGENT_BASE_URL=https://api.openai.com/v1
 ```
 
-Copy the returned `id`, then inspect, investigate, review evidence, approve, and verify:
+Timeout, step, repeated-call, and retry limits are configurable with the remaining `RELAY_` variables in `.env.example`. Never commit `.env` or credentials. If provider selection is configured without a key, Relay stays deterministic.
+
+## CLI demo
+
+After `make install`:
 
 ```bash
-export INCIDENT_ID='<returned-id>'
-
-curl -sS http://localhost:8000/incidents/$INCIDENT_ID
-curl -sS -X POST http://localhost:8000/incidents/$INCIDENT_ID/investigate
-curl -sS http://localhost:8000/incidents/$INCIDENT_ID/evidence
-curl -sS -X POST http://localhost:8000/incidents/$INCIDENT_ID/approve-remediation
-curl -sS http://localhost:8000/incidents/$INCIDENT_ID
+relay create --scenario incorrect-route
+relay investigate <incident-id>
+relay show <incident-id>
+relay approve <incident-id> <remediation-id> --by alice
+relay show <incident-id>
 ```
 
-Additional endpoints:
+`investigate` stops at `AWAITING_APPROVAL`; a direct write through the registry remains blocked. `approve` executes only the matching proposal and then verifies recovery. `continue` resumes an incident in a resumable state.
+
+## API
+
+Milestone 1 endpoints remain available, including `POST /incidents/{id}/investigate` and `POST /incidents/{id}/approve-remediation`. New agent endpoints are:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/health` | Liveness check |
-| GET | `/incidents` | List persisted incidents |
-| GET | `/network/topology` | Inspect current simulator state |
+| POST | `/incidents/{id}/agent/run` | Start a bounded agent run |
+| POST | `/incidents/{id}/agent/continue` | Resume investigation |
+| GET | `/incidents/{id}/investigation` | Full explicit state and events |
+| GET | `/incidents/{id}/actions` | Structured decision history |
+| GET | `/incidents/{id}/hypotheses` | Hypotheses and revision history |
+| GET | `/incidents/{id}/remediations` | Proposal/attempt history |
+| POST | `/incidents/{id}/remediations/{rid}/approve` | Approve the exact proposal |
+| GET | `/incidents/{id}/verification` | Latest recovery evidence/result |
 
-Incident responses include current status, the explicit plan, investigation runs, tool calls, evidence, hypotheses, remediation proposal, approval state, and verification result.
+Example approval body:
 
-## Tool system and simulator
+```json
+{"remediation_id":"<same-remediation-id>","approved_by":"alice@example.com"}
+```
 
-Every tool owns a Pydantic input type and produces a common typed result. The registry handles lookup, validation, deterministic execution, error normalization, and the mutation approval guard. Invalid devices/interfaces and malformed inputs return useful failures instead of silently succeeding.
+## Evaluation and quality
 
-The simulator is a small graph. A link is traversable only when both attached interfaces are administratively and operationally up. Ping uses graph reachability and accumulated link latency; traceroute returns the deterministic path or the furthest reachable boundary. The model also provides routes, logs, and configuration used as corroborating evidence.
+Run all six scenarios with the real deterministic planner:
 
-## Tests and quality checks
+```bash
+python -m relay.eval --output evaluation-results.json
+```
+
+The command prints a human summary and writes structured JSON. Metrics cover root-cause and remediation accuracy, actual resolution, safety violations, diagnostic calls, decision steps, injected timeout recovery, and repeated actions. It never invents LLM scores when no provider is configured; CI uses deterministic/scripted models.
 
 ```bash
 make test
 make lint
 make typecheck
-# or all three
 make check
 ```
 
-The suite covers simulator topology and failures, ping/traceroute paths, typed registry behavior, invalid inputs, state transitions, the approval guard, seeded diagnosis, remediation, recovery verification, persistence after repository reopen, and the complete HTTP workflow.
+Tests retain the 14 Milestone 1 cases and add deterministic integration coverage for every scenario, scripted model/provider failure behavior, bounded repeats, retry metadata, hypothesis updates, exact approval isolation, unauthorized writes, failed verification re-entry, successful resolution, and agent API surfaces. No test calls a live model.
 
-Milestone 1 was verified locally with Python 3.12.14: 14 tests passed with 95% statement coverage, Ruff lint/format checks passed, strict mypy passed, and the live Uvicorn workflow reached `RESOLVED`. Docker Compose could not be executed on the development host because Docker was unavailable.
+## Current limitations and future roadmap
 
-## Known limitations
+Implemented now: one stateful bounded investigator, deterministic simulator, optional OpenAI-compatible structured provider adapter, SQLite aggregate persistence, typed tools, exact human approval, explicit verification, CLI/API demos, events, and deterministic evaluation.
 
-- The planner handles the seeded scenario and is not a general reasoning system.
-- Simulator mutations are in memory and reset on application restart.
-- SQLite stores aggregates as JSON; future cross-incident analytics may warrant normalized event tables.
-- Approval is an API action without identity, roles, audit signatures, or rejection flow yet.
-- Execution is synchronous and single-process; there is no job queue or distributed locking.
-
-## Roadmap
-
-- LLM-backed planner behind the existing planner interface
-- React/TypeScript frontend and topology visualization
-- Streaming investigation timeline
-- Additional deterministic and stochastic failure scenarios
-- Evaluation harness for diagnosis and remediation outcomes
-- Retries and tool-failure recovery
-- Confidence calibration
-- Multi-agent and specialist-agent experiments
-- Production observability and tracing
-- Authenticated, role-aware approvals and durable simulator/device adapters
+Future work—not presented as complete—includes durable simulator/device-adapter state across process restarts, authenticated role-based approval signatures, background workers and concurrency control, richer provider adapters and prompt/version telemetry, calibrated confidence evaluation, production tracing, real network integrations, and specialist/multi-agent experiments.

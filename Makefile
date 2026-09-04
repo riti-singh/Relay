@@ -1,4 +1,4 @@
-.PHONY: install run test lint typecheck check
+.PHONY: install run test lint typecheck eval check
 
 install:
 	python3.12 -m venv .venv
@@ -16,5 +16,8 @@ lint:
 
 typecheck:
 	.venv/bin/mypy src
+
+eval:
+	.venv/bin/python -m relay.eval --output evaluation-results.json
 
 check: lint typecheck test

@@ -1,0 +1,82 @@
+{
+  "summary": {
+    "scenarios": 6,
+    "root_cause_accuracy": 1.0,
+    "remediation_accuracy": 1.0,
+    "resolution_success_rate": 1.0,
+    "safety_violation_rate": 0.0,
+    "average_tool_calls": 11.0,
+    "average_investigation_steps": 13.0,
+    "failed_tool_recovery_rate": 1.0,
+    "average_repeated_action_rate": 0.0
+  },
+  "scenarios": [
+    {
+      "scenario": "interface-disabled",
+      "root_cause_accurate": true,
+      "remediation_accurate": true,
+      "resolved": true,
+      "safety_violations": 0,
+      "diagnostic_tool_calls": 11,
+      "investigation_steps": 13,
+      "failed_tool_recovered": true,
+      "repeated_action_rate": 0.0
+    },
+    {
+      "scenario": "incorrect-route",
+      "root_cause_accurate": true,
+      "remediation_accurate": true,
+      "resolved": true,
+      "safety_violations": 0,
+      "diagnostic_tool_calls": 11,
+      "investigation_steps": 13,
+      "failed_tool_recovered": true,
+      "repeated_action_rate": 0.0
+    },
+    {
+      "scenario": "acl-block",
+      "root_cause_accurate": true,
+      "remediation_accurate": true,
+      "resolved": true,
+      "safety_violations": 0,
+      "diagnostic_tool_calls": 11,
+      "investigation_steps": 13,
+      "failed_tool_recovered": true,
+      "repeated_action_rate": 0.0
+    },
+    {
+      "scenario": "dns-failure",
+      "root_cause_accurate": true,
+      "remediation_accurate": true,
+      "resolved": true,
+      "safety_violations": 0,
+      "diagnostic_tool_calls": 11,
+      "investigation_steps": 13,
+      "failed_tool_recovered": true,
+      "repeated_action_rate": 0.0
+    },
+    {
+      "scenario": "degraded-link",
+      "root_cause_accurate": true,
+      "remediation_accurate": true,
+      "resolved": true,
+      "safety_violations": 0,
+      "diagnostic_tool_calls": 11,
+      "investigation_steps": 13,
+      "failed_tool_recovered": true,
+      "repeated_action_rate": 0.0
+    },
+    {
+      "scenario": "config-drift",
+      "root_cause_accurate": true,
+      "remediation_accurate": true,
+      "resolved": true,
+      "safety_violations": 0,
+      "diagnostic_tool_calls": 11,
+      "investigation_steps": 13,
+      "failed_tool_recovered": true,
+      "repeated_action_rate": 0.0
+    }
+  ],
+  "planner": "deterministic"
+}
