@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import BaseModel, Field
 
 
@@ -6,3 +8,9 @@ class IncidentCreate(BaseModel):
     description: str = Field(min_length=1)
     source_device: str = Field(min_length=1)
     destination_device: str = Field(min_length=1)
+    scenario: str = "interface-disabled"
+
+
+class RemediationApproval(BaseModel):
+    approved_by: str = Field(min_length=1)
+    remediation_id: UUID

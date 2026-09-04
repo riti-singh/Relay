@@ -1,9 +1,32 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
+from urllib import error, request
 
-from relay.domain.models import Incident
+from pydantic import ValidationError
+
+from relay.domain.models import (
+    ActionKind,
+    AgentDecision,
+    HypothesisStatus,
+    Incident,
+    InvestigationContext,
+)
+
+
+class AgentModelError(RuntimeError):
+    pass
+
+
+class MalformedModelResponseError(AgentModelError):
+    pass
+
+
+class AgentModel(Protocol):
+    async def decide_next_action(self, context: InvestigationContext) -> AgentDecision: ...
 
 
 @dataclass(frozen=True)
@@ -18,22 +41,217 @@ class InvestigationPlanner(Protocol):
 
 
 class DeterministicPlanner:
-    """An explicit planner for the seeded scenario, replaceable by an LLM planner."""
+    """Evidence-driven deterministic model and Milestone 1 plan compatibility adapter."""
 
     def plan(self, incident: Incident) -> list[PlannedToolCall]:
-        connectivity: dict[str, object] = {
+        args: dict[str, object] = {
             "source": incident.source_device,
             "destination": incident.destination_device,
         }
         return [
             PlannedToolCall("get_network_topology", {}, "Captured current network topology"),
-            PlannedToolCall("ping", connectivity, "Tested end-to-end reachability"),
-            PlannedToolCall(
-                "traceroute", connectivity, "Located the connectivity failure boundary"
-            ),
+            PlannedToolCall("ping", args, "Tested end-to-end reachability"),
+            PlannedToolCall("traceroute", args, "Located the connectivity failure boundary"),
             PlannedToolCall(
                 "get_route_table",
                 {"device_id": incident.source_device},
                 "Inspected source routing state",
             ),
         ]
+
+    async def decide_next_action(self, context: InvestigationContext) -> AgentDecision:
+        done = [call.tool_name for call in context.recent_tool_calls]
+        endpoints = {"source": context.source_device, "destination": context.destination_device}
+        sequence: list[tuple[str, dict[str, Any], str]] = [
+            ("get_network_topology", {}, "Capture bounded topology"),
+            ("ping", endpoints, "Test IP reachability"),
+            ("traceroute", endpoints, "Locate path failure"),
+            ("get_route_table", {"device_id": context.source_device}, "Inspect source route"),
+            (
+                "get_interface_status",
+                {"device_id": "core-router-02", "interface_name": "eth1"},
+                "Inspect branch uplink",
+            ),
+            ("test_tcp_connection", {**endpoints, "port": 443}, "Test application service"),
+            ("resolve_dns", {"hostname": "payments.internal"}, "Test service DNS"),
+            ("get_acl_rules", {"device_id": "core-router-02"}, "Inspect traffic policy"),
+            (
+                "get_link_metrics",
+                {"device_a": "branch-03", "device_b": "core-router-02"},
+                "Inspect link health",
+            ),
+            ("get_packet_loss", endpoints, "Measure packet loss"),
+            (
+                "compare_config_to_baseline",
+                {"device_id": "core-router-02"},
+                "Check configuration drift",
+            ),
+        ]
+        for name, arguments, summary in sequence:
+            if name not in done:
+                return AgentDecision(
+                    kind=ActionKind.RUN_TOOL, tool_name=name, arguments=arguments, summary=summary
+                )
+        finding = self._finding(context)
+        active = context.active_hypotheses
+        if not active:
+            return AgentDecision(
+                kind=ActionKind.UPDATE_HYPOTHESIS,
+                summary="Evidence supports a root-cause hypothesis",
+                hypothesis=finding[0],
+                suspected_component=finding[1],
+                confidence=0.98,
+                hypothesis_status=HypothesisStatus.CONFIRMED,
+                supporting_evidence_ids=[e.id for e in context.evidence],
+            )
+        return AgentDecision(
+            kind=ActionKind.PROPOSE_REMEDIATION,
+            summary="Propose evidence-backed remediation",
+            tool_name=finding[2],
+            arguments=finding[3],
+            remediation_description=finding[4],
+        )
+
+    @staticmethod
+    def _finding(context: InvestigationContext) -> tuple[str, str, str, dict[str, Any], str]:
+        observations = {
+            c.tool_name: next(
+                (e.observation for e in reversed(context.evidence) if e.tool_call_id == c.id), {}
+            )
+            for c in context.recent_tool_calls
+        }
+        interface = observations.get("get_interface_status", {})
+        route = observations.get("get_route_table", {}).get("routes", {})
+        tcp = observations.get("test_tcp_connection", {})
+        dns = observations.get("resolve_dns", {})
+        acl = observations.get("get_acl_rules", {}).get("rules", [])
+        metrics = observations.get("get_link_metrics", {})
+        config = observations.get("compare_config_to_baseline", {})
+        if interface.get("admin_up") is False:
+            return (
+                "core-router-02/eth1 is administratively disabled",
+                "core-router-02/eth1",
+                "set_interface_admin_state",
+                {"device_id": "core-router-02", "interface_name": "eth1", "admin_up": True},
+                "Enable the branch uplink",
+            )
+        if route.get(context.destination_device) != "core-router-02":
+            return (
+                "branch-03 route to payments-api has wrong next hop core-router-01",
+                "branch-03 route",
+                "set_static_route",
+                {
+                    "device_id": "branch-03",
+                    "destination": context.destination_device,
+                    "next_hop": "core-router-02",
+                },
+                "Restore the correct static route",
+            )
+        if tcp.get("reason") == "ACL_DENY" or any(
+            r.get("enabled") and r.get("action") == "deny" for r in acl
+        ):
+            return (
+                "core-router-02 ACL denies TCP port 443",
+                "core-router-02 ACL",
+                "set_acl_rule_enabled",
+                {"device_id": "core-router-02", "rule_id": "deny-payments", "enabled": False},
+                "Disable the erroneous deny rule",
+            )
+        if dns.get("target") != context.destination_device:
+            return (
+                "payments.internal has an incorrect DNS record",
+                "payments.internal",
+                "set_dns_record",
+                {"hostname": "payments.internal", "target": context.destination_device},
+                "Restore the service DNS record",
+            )
+        if metrics.get("packet_loss_percent", 0) > 5 or metrics.get("latency_ms", 0) > 100:
+            return (
+                "branch-03 uplink is degraded",
+                "branch-03/core-router-02 link",
+                "repair_link",
+                {"device_a": "branch-03", "device_b": "core-router-02"},
+                "Repair the degraded branch uplink",
+            )
+        if config.get("matches") is False:
+            return (
+                "core-router-02 forwarding configuration drift",
+                "core-router-02 config",
+                "restore_config_baseline",
+                {"device_id": "core-router-02"},
+                "Restore the approved configuration baseline",
+            )
+        raise AgentModelError("evidence does not identify a known deterministic root cause")
+
+
+class ScriptedAgentModel:
+    def __init__(self, decisions: list[AgentDecision | dict[str, Any] | Exception]) -> None:
+        self.decisions = list(decisions)
+
+    async def decide_next_action(self, context: InvestigationContext) -> AgentDecision:
+        if not self.decisions:
+            raise AgentModelError("script exhausted")
+        item = self.decisions.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        try:
+            return item if isinstance(item, AgentDecision) else AgentDecision.model_validate(item)
+        except ValidationError as exc:
+            raise MalformedModelResponseError(str(exc)) from exc
+
+
+class OpenAICompatibleAgentModel:
+    """Provider adapter using a JSON-schema response; no provider types escape this module."""
+
+    def __init__(
+        self, api_key: str, model: str, base_url: str, timeout_seconds: float = 30
+    ) -> None:
+        self.api_key, self.model, self.base_url, self.timeout_seconds = (
+            api_key,
+            model,
+            base_url.rstrip("/"),
+            timeout_seconds,
+        )
+
+    async def decide_next_action(self, context: InvestigationContext) -> AgentDecision:
+        return await asyncio.wait_for(
+            asyncio.to_thread(self._request, context), timeout=self.timeout_seconds + 1
+        )
+
+    def _request(self, context: InvestigationContext) -> AgentDecision:
+        payload = {
+            "model": self.model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Choose one safe Relay action from the supplied bounded investigation "
+                        "context. Return only the structured decision. Never request shell or "
+                        "code execution."
+                    ),
+                },
+                {"role": "user", "content": context.model_dump_json()},
+            ],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "agent_decision",
+                    "strict": True,
+                    "schema": AgentDecision.model_json_schema(),
+                }
+            },
+        }
+        req = request.Request(
+            f"{self.base_url}/responses",
+            data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+        )
+        try:
+            with request.urlopen(req, timeout=self.timeout_seconds) as response:
+                raw = json.loads(response.read())
+            text = raw["output"][0]["content"][0]["text"]
+            return AgentDecision.model_validate_json(text)
+        except (error.URLError, TimeoutError) as exc:
+            raise AgentModelError(f"provider request failed: {exc}") from exc
+        except (KeyError, ValueError, ValidationError) as exc:
+            raise MalformedModelResponseError(f"malformed provider response: {exc}") from exc
