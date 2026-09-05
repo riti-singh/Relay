@@ -45,3 +45,16 @@ def test_api_errors(client: TestClient) -> None:
     assert "unknown incident device" in response.json()["detail"]
     created = client.post("/incidents", json=PAYLOAD).json()
     assert client.post(f"/incidents/{created['id']}/approve-remediation").status_code == 409
+
+
+def test_local_frontend_origins_can_reach_api(client: TestClient) -> None:
+    for origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
+        response = client.options(
+            "/dashboard/summary",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == origin
