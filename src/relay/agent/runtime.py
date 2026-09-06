@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from relay.agent.planner import AgentModel, AgentModelError, MalformedModelRespo
 from relay.domain.models import (
     ActionKind,
     AgentAction,
+    AgentRunStatus,
     ApprovalState,
     Evidence,
     Hypothesis,
@@ -51,6 +53,8 @@ class AgentRuntime:
         max_steps: int = 20,
         max_repeated_calls: int = 2,
         context_evidence_limit: int = 20,
+        checkpoint: Callable[[Incident], None] | None = None,
+        should_cancel: Callable[[UUID], bool] | None = None,
     ) -> None:
         self.registry, self.model = registry, model
         self.max_steps, self.max_repeated_calls, self.context_evidence_limit = (
@@ -58,11 +62,13 @@ class AgentRuntime:
             max_repeated_calls,
             context_evidence_limit,
         )
+        self.checkpoint = checkpoint
+        self.should_cancel = should_cancel or (lambda _run_id: False)
 
-    def run(self, incident: Incident) -> Incident:
-        return asyncio.run(self.run_async(incident))
+    def run(self, incident: Incident, run: InvestigationRun | None = None) -> Incident:
+        return asyncio.run(self.run_async(incident, run))
 
-    async def run_async(self, incident: Incident) -> Incident:
+    async def run_async(self, incident: Incident, run: InvestigationRun | None = None) -> Incident:
         if incident.status in {IncidentStatus.OPEN, IncidentStatus.BLOCKED, IncidentStatus.FAILED}:
             incident.transition_to(IncidentStatus.INVESTIGATING)
         elif incident.status is not IncidentStatus.INVESTIGATING:
@@ -74,27 +80,50 @@ class AgentRuntime:
             "Propose an exact remediation and pause for approval",
         ]
         incident.investigation_plan = plan
-        run = InvestigationRun(plan=plan)
-        incident.investigation_runs.append(run)
-        self._event(incident, run.id, "investigation_started", "Bounded investigation started")
+        if run is None:
+            run = InvestigationRun(incident_id=incident.id, max_steps=self.max_steps, plan=plan)
+            incident.investigation_runs.append(run)
+            self._event(incident, run.id, "RUN_QUEUED", "Investigation queued")
+        run.plan = plan
+        run.status = AgentRunStatus.RUNNING
+        run.started_at = datetime.now(UTC)
+        self._event(incident, run.id, "RUN_STARTED", "Investigation started")
         repeated: dict[str, int] = {}
         for step in range(1, self.max_steps + 1):
+            if self.should_cancel(run.id):
+                run.cancellation_requested_at = run.cancellation_requested_at or datetime.now(UTC)
+                run.status = AgentRunStatus.CANCELLED
+                run.cancelled_at = run.completed_at = datetime.now(UTC)
+                run.outcome = "Cancelled before the next safe agent step"
+                incident.status = IncidentStatus.OPEN
+                self._event(incident, run.id, "RUN_CANCELLED", run.outcome)
+                return incident
+            run.current_step = step
             context = self._context(incident, self.max_steps - step + 1)
-            self._event(incident, run.id, "planner_invoked", f"Planner invoked for step {step}")
+            self._event(incident, run.id, "AGENT_DECISION_RECORDED", f"Choosing step {step}")
             try:
                 decision = await self.model.decide_next_action(context)
             except (TimeoutError, AgentModelError, MalformedModelResponseError) as exc:
                 run.outcome = f"Investigation blocked by planner failure: {exc}"
                 run.completed_at = datetime.now(UTC)
                 run.steps_used = step
+                run.status = AgentRunStatus.BLOCKED
+                run.error_category = "PROVIDER_ERROR"
+                run.error_message = str(exc)
                 incident.transition_to(IncidentStatus.BLOCKED)
-                self._event(incident, run.id, "planner_failed", str(exc))
+                self._event(
+                    incident,
+                    run.id,
+                    "RUN_FAILED",
+                    str(exc),
+                    {"legacy_event_type": "planner_failed", "category": "PROVIDER_ERROR"},
+                )
                 self._summarize(incident)
                 return incident
             action = AgentAction(run_id=run.id, step=step, decision=decision)
             incident.actions.append(action)
             run.steps_used = step
-            self._event(incident, run.id, "action_selected", decision.summary)
+            self._event(incident, run.id, "AGENT_DECISION_RECORDED", decision.summary)
             if decision.kind in {ActionKind.RUN_TOOL, ActionKind.REQUEST_EVIDENCE}:
                 if not decision.tool_name:
                     action.successful = False
@@ -105,7 +134,7 @@ class AgentRuntime:
                 if repeated[signature] > self.max_repeated_calls:
                     action.successful = False
                     action.error = "repeated tool-call limit exceeded"
-                    self._event(incident, run.id, "action_rejected", action.error)
+                    self._event(incident, run.id, "AGENT_DECISION_RECORDED", action.error)
                     continue
                 call = self._execute(
                     incident, decision.tool_name, decision.arguments, decision.summary, run.id
@@ -117,7 +146,12 @@ class AgentRuntime:
                 )
             elif decision.kind is ActionKind.UPDATE_HYPOTHESIS:
                 self._update_hypothesis(incident, decision)
-                self._event(incident, run.id, "hypothesis_updated", decision.summary)
+                event_type = (
+                    "HYPOTHESIS_CREATED"
+                    if len(incident.hypotheses[-1].history) == 1
+                    else "HYPOTHESIS_REVISED"
+                )
+                self._event(incident, run.id, event_type, decision.summary)
             elif decision.kind is ActionKind.PROPOSE_REMEDIATION:
                 if (
                     not decision.tool_name
@@ -145,25 +179,34 @@ class AgentRuntime:
                 incident.transition_to(IncidentStatus.AWAITING_APPROVAL)
                 run.outcome = "Root cause identified; remediation awaits exact-action approval"
                 run.completed_at = datetime.now(UTC)
-                self._event(incident, run.id, "remediation_proposed", proposal.description)
+                run.status = AgentRunStatus.AWAITING_APPROVAL
+                self._event(incident, run.id, "REMEDIATION_PROPOSED", proposal.description)
+                self._event(
+                    incident, run.id, "APPROVAL_REQUIRED", "Exact-action human approval required"
+                )
                 self._summarize(incident)
                 return incident
             elif decision.kind is ActionKind.DECLARE_RESOLVED:
                 incident.transition_to(IncidentStatus.RESOLVED)
                 run.outcome = decision.summary
                 run.completed_at = datetime.now(UTC)
+                run.status = AgentRunStatus.COMPLETED
+                self._event(incident, run.id, "RUN_COMPLETED", decision.summary)
                 self._summarize(incident)
                 return incident
             elif decision.kind is ActionKind.DECLARE_BLOCKED:
                 incident.transition_to(IncidentStatus.BLOCKED)
                 run.outcome = decision.summary
                 run.completed_at = datetime.now(UTC)
+                run.status = AgentRunStatus.BLOCKED
+                self._event(incident, run.id, "RUN_FAILED", decision.summary)
                 self._summarize(incident)
                 return incident
         incident.transition_to(IncidentStatus.BLOCKED)
         run.outcome = "Investigation reached configured step limit"
         run.completed_at = datetime.now(UTC)
-        self._event(incident, run.id, "step_limit_reached", run.outcome)
+        run.status = AgentRunStatus.BLOCKED
+        self._event(incident, run.id, "RUN_FAILED", run.outcome)
         self._summarize(incident)
         return incident
 
@@ -212,13 +255,21 @@ class AgentRuntime:
             tool_name=name, arguments=arguments, risk=risk, state_changing=risk.value != "READ_ONLY"
         )
         incident.tool_calls.append(call)
-        self._event(incident, run_id, "tool_started", name)
+        self._event(
+            incident,
+            run_id,
+            "TOOL_CALL_STARTED",
+            name,
+            {"tool_call_id": str(call.id), "tool_name": name, "arguments": arguments},
+        )
         try:
             result = self.registry.execute(name, arguments, approved=approved)
         except ApprovalRequiredError as exc:
             call.success = False
             call.error = str(exc)
-            self._event(incident, run_id, "tool_failed", str(exc))
+            self._event(
+                incident, run_id, "TOOL_CALL_FAILED", str(exc), {"tool_call_id": str(call.id)}
+            )
             return call
         call.completed_at = datetime.now(UTC)
         call.duration_ms = result.duration_ms
@@ -235,15 +286,31 @@ class AgentRuntime:
                     is_verification=verification,
                 )
             )
+            run = next(r for r in incident.investigation_runs if r.id == run_id)
+            run.tool_call_count += 1
             self._event(
                 incident,
                 run_id,
-                "tool_completed",
+                "TOOL_CALL_COMPLETED",
                 f"{name} completed after {result.retry_count} retries",
+                {"tool_call_id": str(call.id), "success": True},
+            )
+            self._event(
+                incident,
+                run_id,
+                "EVIDENCE_ADDED",
+                summary,
+                {"evidence_id": str(incident.evidence[-1].id), "tool_call_id": str(call.id)},
             )
         else:
+            run = next(r for r in incident.investigation_runs if r.id == run_id)
+            run.tool_call_count += 1
             self._event(
-                incident, run_id, "tool_failed", f"{name}: {result.error_category}: {result.error}"
+                incident,
+                run_id,
+                "TOOL_CALL_FAILED",
+                f"{name}: {result.error_category}: {result.error}",
+                {"tool_call_id": str(call.id)},
             )
         return call
 
@@ -288,11 +355,31 @@ class AgentRuntime:
             )
         )
 
-    @staticmethod
-    def _event(incident: Incident, run_id: UUID, event_type: str, summary: str) -> None:
+    def _event(
+        self,
+        incident: Incident,
+        run_id: UUID,
+        event_type: str,
+        summary: str,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        sequence = max((event.sequence for event in incident.events), default=0) + 1
+        body = {"summary": summary, **(payload or {})}
         incident.events.append(
-            InvestigationEvent(run_id=run_id, event_type=event_type, summary=summary)
+            InvestigationEvent(
+                sequence=sequence,
+                incident_id=incident.id,
+                run_id=run_id,
+                type=event_type,
+                payload=body,
+            )
         )
+        run = next((item for item in incident.investigation_runs if item.id == run_id), None)
+        if run:
+            run.last_event_sequence = sequence
+        incident.updated_at = datetime.now(UTC)
+        if self.checkpoint:
+            self.checkpoint(incident)
         logger.info(
             "relay_event",
             extra={"run_id": str(run_id), "event_type": event_type, "summary": summary},

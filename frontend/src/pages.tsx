@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
+  Info,
   Play,
   Plus,
   ShieldAlert,
@@ -32,6 +33,40 @@ const scenarioName = (s: string) =>
     "degraded-link": "Congested Link",
     "config-drift": "Configuration Drift",
   })[s] ?? s;
+const workflow = ["Incident", "Investigation", "Diagnostic tools", "Evidence", "Hypothesis", "Root cause", "Human approval", "Remediation", "Verification"];
+function Help({ term, children }: { term: string; children: React.ReactNode }) {
+  return (
+    <span className="help">
+      <button aria-label={`What is ${term}?`} title={String(children)}><Info /></button>
+      <span role="tooltip"><b>{term}</b>{children}</span>
+    </span>
+  );
+}
+export function Home() {
+  const [showGuide, setShowGuide] = useState(() => globalThis.localStorage?.getItem("relay-onboarding-dismissed") !== "true");
+  const dismiss = () => { globalThis.localStorage?.setItem("relay-onboarding-dismissed", "true"); setShowGuide(false); };
+  return (
+    <Page>
+      <section className="hero">
+        <span className="kicker">GUIDED NETWORK INCIDENT RESPONSE</span>
+        <h1>Understand the failure. Approve the change. Verify recovery.</h1>
+        <p>Relay investigates network incidents with diagnostic tools, turns observations into evidence-backed root causes, and keeps every network change behind human approval.</p>
+        <div className="hero-actions"><a className="primary" href="/incidents">Start an investigation <ArrowRight /></a><a href="/incidents">Explore a sample incident</a></div>
+      </section>
+      <section className="workflow" aria-label="Relay investigation workflow">
+        {workflow.map((step, index) => <div key={step}><span>{index + 1}</span><b>{step}</b>{index < workflow.length - 1 && <ArrowRight />}</div>)}
+      </section>
+      {showGuide ? <section className="onboarding panel"><div><span className="kicker">WELCOME TO RELAY</span><h2>Your first investigation</h2></div><ol><li>Choose a simulated network failure.</li><li>Start a deterministic or AI Agent investigation.</li><li>Watch Relay gather evidence and revise hypotheses.</li><li>Review the proposed fix and approve the exact action.</li><li>Watch Relay verify that connectivity recovered.</li></ol><button onClick={dismiss}>Dismiss guide</button></section> : <button className="rediscover" onClick={() => setShowGuide(true)}>Show first-run guide</button>}
+      <div className="explain-grid">
+        <section><h2>Two ways to investigate</h2><p><b>Deterministic mode</b> follows a reproducible decision policy—ideal for demos, tests, and comparing results. <b>AI Agent mode</b> chooses the next safe diagnostic action from the same typed tools. Neither mode can bypass tool validation.</p></section>
+        <section><h2>Autonomous diagnosis, human-controlled change</h2><p>Relay can inspect the network on its own. Before a write, it pauses and fingerprints the exact tool and arguments. Any change invalidates that approval.</p></section>
+        <section><h2>Recovery must be proven</h2><p>Remediation is not success by itself. Relay runs scenario-relevant connectivity checks and resolves the incident only when verification passes.</p></section>
+        <section><h2>Built for evidence, not opaque answers</h2><p>Tool calls, observations, hypotheses, run events, approvals, and verification remain visible and replayable. Hidden model reasoning is never stored.</p></section>
+      </div>
+      <section className="product-areas panel"><h2>Explore Relay</h2><div><a href="/overview"><b>Operations summary</b><span>System-wide operational health</span></a><a href="/incidents"><b>Incident workspace</b><span>Inject failures and investigate</span></a><a href="/topology"><b>Network map</b><span>See devices, links, and evidence</span></a><a href="/runs"><b>Run history</b><span>Replay durable executions</span></a><a href="/evaluations"><b>Quality evaluation</b><span>Measure accuracy and safety</span></a></div></section>
+    </Page>
+  );
+}
 export function Overview() {
   const q = useLoad(() => api.dashboard(), []);
   if (q.error)
@@ -51,6 +86,7 @@ export function Overview() {
     <Page
       eyebrow="LIVE OPERATIONS"
       title="Network health at a glance"
+      description="A system-wide operational summary of active incidents, approvals, recovery, investigation efficiency, and deterministic quality metrics."
       action={
         <a className="primary" href="/incidents">
           <Plus /> Inject Incident
@@ -138,20 +174,32 @@ function Metric({
 }) {
   return (
     <div className={`metric ${alert ? "metric-alert" : ""}`}>
-      <span>{label}</span>
+      <span>{label} {metricHelp[label] && <Help term={label}>{metricHelp[label]}</Help>}</span>
       <strong>{value}</strong>
       <small>ACTUAL RELAY DATA</small>
     </div>
   );
 }
+const metricHelp: Record<string, string> = {
+  "Open incidents": "Connectivity problems that have not yet been verified as resolved.",
+  "Awaiting approval": "Investigations paused before an exact state-changing action.",
+  "Root Cause Accuracy": "How often Relay correctly identifies the actual network failure.",
+  "Remediation Accuracy": "How often Relay proposes the correct repair.",
+  "Resolution Success": "How often remediation passes post-change verification.",
+  "Safety Violation Rate": "Protected actions executed without valid exact-action approval. This should remain zero.",
+  "Average Tool Calls": "Average diagnostic tool calls Relay needs per incident.",
+  "Average Steps": "Average agent decisions before reaching a terminal or approval state.",
+};
 function Page({
   eyebrow,
   title,
+  description,
   action,
   children,
 }: {
   eyebrow?: string;
   title?: string;
+  description?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -162,6 +210,7 @@ function Page({
           <div>
             <span>{eyebrow}</span>
             <h1>{title}</h1>
+            {description && <p>{description}</p>}
           </div>
           {action}
         </div>
@@ -170,7 +219,7 @@ function Page({
     </div>
   );
 }
-function PanelTitle({ title, meta }: { title: string; meta?: string }) {
+function PanelTitle({ title, meta }: { title: React.ReactNode; meta?: string }) {
   return (
     <div className="panel-title">
       <h2>{title}</h2>
@@ -230,6 +279,7 @@ export function Incidents() {
     <Page
       eyebrow="INCIDENT COMMAND"
       title="Incidents"
+      description="An incident is a reported connectivity problem. Inject a simulated scenario, then choose deterministic or AI Agent mode to investigate the symptoms without revealing the seeded cause."
       action={<span className="quiet">Deterministic scenario laboratory</span>}
     >
       <section className="inject panel">
@@ -275,7 +325,7 @@ export function TopologyPage() {
   const q = useLoad(() => api.topology(), []);
   const [selected, setSelected] = useState<string>();
   return (
-    <Page eyebrow="NETWORK DIGITAL TWIN" title="Topology">
+    <Page eyebrow="NETWORK DIGITAL TWIN" title="Topology" description="Devices are nodes and network connections are edges. Relay highlights affected paths and suspected components as evidence narrows the diagnosis.">
       <div className="topology-page panel">
         {q.error ? (
           <ErrorState message={q.error} retry={q.reload} />
@@ -306,20 +356,29 @@ export function IncidentPage() {
   const [selected, setSelected] = useState<string>();
   const [planner, setPlanner] = useState("deterministic");
   const [busy, setBusy] = useState(false);
+  const [activeRun, setActiveRun] = useState<string>();
   useEffect(() => {
-    if (!q.data || !["OPEN", "INVESTIGATING"].includes(q.data.status)) return;
-    const t = setInterval(() => void q.reload(), 700);
-    return () => clearInterval(t);
-  }, [q.data?.status, q.reload]);
+    if (!activeRun) return;
+    const stream = api.events(id, activeRun);
+    stream.onmessage = () => void q.reload();
+    stream.onerror = () => { stream.close(); void q.reload(); };
+    return () => stream.close();
+  }, [activeRun, id, q.reload]);
   const incident = q.data;
   async function run() {
     setBusy(true);
     try {
-      await api.start(id, planner);
+      const started = await api.start(id, planner);
+      setActiveRun(started.id);
       await q.reload();
     } finally {
       setBusy(false);
     }
+  }
+  async function cancel() {
+    if (!activeRun) return;
+    await api.cancel(id, activeRun);
+    await q.reload();
   }
   async function approve() {
     if (!incident?.proposed_remediation) return;
@@ -366,6 +425,7 @@ export function IncidentPage() {
         </div>
         <div className="run-control">
           <label>Investigation mode</label>
+          <p className="control-help">Deterministic is reproducible; AI Agent chooses diagnostic steps dynamically. Both use the same validated tools and approval boundary.</p>
           <div className="segmented">
             <button
               className={planner === "deterministic" ? "active" : ""}
@@ -406,6 +466,9 @@ export function IncidentPage() {
               ? "Continue Investigation"
               : "Start Investigation"}
           </button>
+          {activeRun && incident.status === "INVESTIGATING" && (
+            <button className="cancel" onClick={cancel}>Cancel safely</button>
+          )}
         </div>
       </div>
       {incident.status === "INVESTIGATING" && (
@@ -422,6 +485,11 @@ export function IncidentPage() {
           </span>
         </div>
       )}
+      <div className="progress-steps" aria-label="Investigation progress">
+        {["Incident context", "Investigation", "Evidence", "Root cause", "Approval", "Remediation", "Verification"].map((step, index) => (
+          <span className={progressIndex(incident.status) >= index ? "done" : ""} key={step}>{index + 1}<small>{step}</small></span>
+        ))}
+      </div>
       <div className="workspace">
         <section className="panel topology-work">
           <PanelTitle title="Incident path" meta="EVIDENCE-AWARE TOPOLOGY" />
@@ -449,10 +517,10 @@ export function IncidentPage() {
         </section>
         <section className="panel evidence-panel">
           <PanelTitle
-            title="Evidence"
+            title={<>Evidence <Help term="Evidence">Facts collected from diagnostic tools. Relay uses them to support or contradict hypotheses.</Help></>}
             meta={`${incident.evidence.length} OBSERVATIONS`}
           />
-          {incident.evidence.map((e) => (
+          {incident.evidence.length ? incident.evidence.map((e) => (
             <button key={e.id} onClick={() => setSelected(component(e))}>
               <span>{fmtTime(e.recorded_at)}</span>
               <b>{e.summary}</b>
@@ -463,10 +531,10 @@ export function IncidentPage() {
                   .join(" · ")}
               </small>
             </button>
-          ))}
+          )) : <Empty title="No evidence yet" detail="Evidence appears here as diagnostic tools complete." />}
         </section>
         <section className="panel hypotheses">
-          <PanelTitle title="Active hypotheses" meta="HEURISTIC CONFIDENCE" />
+          <PanelTitle title={<>Hypotheses <Help term="Confidence">Possible explanations for the failure. Confidence changes as evidence arrives; it is not a guarantee.</Help></>} meta="EVIDENCE-BACKED CONFIDENCE" />
           {incident.hypotheses.length ? (
             incident.hypotheses.map((h) => (
               <div
@@ -509,6 +577,7 @@ export function IncidentPage() {
     </Page>
   );
 }
+const progressIndex = (status: string) => ({ OPEN: 0, INVESTIGATING: 2, BLOCKED: 2, FAILED: 2, AWAITING_APPROVAL: 4, REMEDIATING: 5, VERIFYING: 6, RESOLVED: 6 } as Record<string, number>)[status] ?? 0;
 const component = (e: Evidence) =>
   String(
     e.observation.device_id ??
@@ -572,6 +641,7 @@ function Approval({
         <div>
           <span>AWAITING HUMAN APPROVAL</span>
           <h2>{r.description}</h2>
+          <p>Relay investigated autonomously, but it cannot change the network without your approval.</p>
         </div>
       </div>
       <div className="approval-body">
@@ -584,6 +654,7 @@ function Approval({
               .join(",")}
             \n)
           </pre>
+          <small>Affects {String(r.arguments.device_id ?? r.arguments.link_id ?? r.arguments.hostname ?? "the incident network resource")}.</small>
         </div>
         <div>
           <label>Why Relay recommends it</label>
@@ -597,7 +668,9 @@ function Approval({
           <label>Risk classification</label>
           <Status value="LOW_RISK_WRITE" />
           <p>Execution remains blocked until this exact action is approved.</p>
+          <small>The approval fingerprint binds this incident, remediation, tool, and canonical arguments. Modified arguments invalidate approval.</small>
         </div>
+        <div><label>What happens next</label><p>Relay executes the write once, then runs connectivity checks. It marks the incident resolved only if verification proves recovery.</p></div>
       </div>
       <div className="approval-actions">
         <button className="primary approve" disabled={busy} onClick={approve}>
@@ -618,7 +691,7 @@ function Approval({
 export function Runs() {
   const q = useLoad(() => api.runs(), []);
   return (
-    <Page eyebrow="AUDIT LOG" title="Agent runs">
+    <Page eyebrow="AUDIT LOG" title="Agent runs" description="A run is one bounded, durable investigation execution. Its status, decisions, tool calls, and events can be replayed after completion.">
       <section className="panel">
         <PanelTitle
           title="Investigation runs"
@@ -634,26 +707,22 @@ export function Runs() {
               <span>Planner</span>
               <span>Steps</span>
               <span>Tools</span>
-              <span>Result</span>
+              <span>Status</span>
             </div>
             {q.data.map((r: any) => (
-              <a
-                href={`/incidents/${r.incident_id}`}
-                className="run-row"
-                key={r.id}
-              >
+              <details className="run-replay" key={r.id}><summary className="run-row">
                 <span>
                   <b>{String(r.id).slice(0, 8)}</b>
                   <small>{r.incident_title}</small>
                 </span>
                 <span>{scenarioName(r.scenario)}</span>
                 <span>{r.planner}</span>
-                <span>{r.steps_used}</span>
-                <span>{r.tool_calls}</span>
+                <span>{r.current_step ?? r.steps_used} / {r.max_steps ?? "—"}</span>
+                <span>{r.tool_call_count ?? 0}</span>
                 <span>
                   <Status value={r.status} />
                 </span>
-              </a>
+              </summary><div className="event-replay"><p><b>Latest activity:</b> {r.latest_event?.payload?.summary ?? "Queued"}</p>{r.events?.map((e: any) => <div key={e.event_id}><time>{fmtTime(e.timestamp)}</time><Status value={e.type} /><span>{e.payload?.summary}</span></div>)}<a href={`/incidents/${r.incident_id}`}>Open incident workspace <ArrowRight /></a></div></details>
             ))}
           </div>
         ) : (
@@ -682,7 +751,7 @@ export function Evaluations() {
     );
   const s = q.data.summary;
   return (
-    <Page eyebrow="DETERMINISTIC EVALUATION" title="Agent performance">
+    <Page eyebrow="DETERMINISTIC EVALUATION" title="Agent performance" description="The same six known failures are replayed without a live LLM so accuracy, efficiency, recovery, and safety remain reproducible.">
       <div className="metric-grid eval">
         <Metric
           label="Root Cause Accuracy"

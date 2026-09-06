@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any, cast
 from uuid import UUID
 
 from relay.agent.planner import AgentModel, DeterministicPlanner, InvestigationPlanner
 from relay.agent.runtime import AgentRuntime, action_fingerprint
 from relay.domain.models import (
+    AgentRunStatus,
     ApprovalRecord,
     ApprovalState,
     Evidence,
@@ -44,9 +46,10 @@ class IncidentService:
             else DeterministicPlanner()
         )
         self.runtime = runtime or AgentRuntime(registry, model)
-        self._scenario_runtimes: dict[str, tuple[ToolRegistry, AgentRuntime]] = {
-            registry.simulator.scenario: (registry, self.runtime)
-        }
+        self._incident_runtimes: dict[UUID, tuple[ToolRegistry, AgentRuntime]] = {}
+        self._base_claimed = False
+        self._cancelled_runs: set[UUID] = set()
+        self._lock = Lock()
 
     def create(
         self,
@@ -56,12 +59,6 @@ class IncidentService:
         destination_device: str,
         scenario: str = "interface-disabled",
     ) -> Incident:
-        self._activate_scenario(scenario)
-        topology = self.registry.execute("get_network_topology", {})
-        device_ids = {device["id"] for device in topology.output["devices"]}
-        unknown = {source_device, destination_device} - device_ids
-        if unknown:
-            raise ValueError(f"unknown incident device(s): {', '.join(sorted(unknown))}")
         incident = Incident(
             title=title,
             description=description,
@@ -69,6 +66,13 @@ class IncidentService:
             destination_device=destination_device,
             scenario=scenario,
         )
+        registry, runtime = self._new_incident_runtime(incident)
+        self._incident_runtimes[incident.id] = (registry, runtime)
+        topology = registry.execute("get_network_topology", {})
+        device_ids = {device["id"] for device in topology.output["devices"]}
+        unknown = {source_device, destination_device} - device_ids
+        if unknown:
+            raise ValueError(f"unknown incident device(s): {', '.join(sorted(unknown))}")
         self.repository.save(incident)
         return incident
 
@@ -82,12 +86,13 @@ class IncidentService:
         return self.repository.list()
 
     def reset_scenario(self, scenario: str) -> None:
-        self._activate_scenario(scenario, force_reset=True)
+        # Kept for API compatibility. New incidents always receive isolated state.
+        return None
 
     def topology_for_incident(self, incident_id: UUID) -> NetworkTopology:
         incident = self.get(incident_id)
-        self._activate_scenario(incident.scenario)
-        return self.registry.simulator.topology()
+        registry, _ = self._runtime_for(incident)
+        return registry.simulator.topology()
 
     def reject_remediation(self, incident_id: UUID, rejected_by: str, reason: str) -> Incident:
         incident = self.get(incident_id)
@@ -96,9 +101,14 @@ class IncidentService:
         incident.approval_state = ApprovalState.REJECTED
         incident.events.append(
             InvestigationEvent(
+                sequence=max((event.sequence for event in incident.events), default=0) + 1,
+                incident_id=incident.id,
                 run_id=incident.investigation_runs[-1].id,
-                event_type="remediation_rejected",
-                summary=f"{rejected_by} rejected remediation: {reason}",
+                type="AGENT_DECISION_RECORDED",
+                payload={
+                    "summary": f"{rejected_by} rejected remediation: {reason}",
+                    "decision": "REMEDIATION_REJECTED",
+                },
             )
         )
         incident.proposed_remediation = None
@@ -109,10 +119,56 @@ class IncidentService:
 
     def agent_run(self, incident_id: UUID) -> Incident:
         incident = self.get(incident_id)
-        self._activate_scenario(incident.scenario)
-        incident = self.runtime.run(incident)
+        _, runtime = self._runtime_for(incident)
+        incident = runtime.run(incident)
         self.repository.save(incident)
         return incident
+
+    def queue_agent_run(
+        self, incident_id: UUID, provider: str = "deterministic"
+    ) -> InvestigationRun:
+        incident = self.get(incident_id)
+        run = InvestigationRun(
+            incident_id=incident.id,
+            status=AgentRunStatus.QUEUED,
+            provider=provider,
+            model=provider,
+            max_steps=self.runtime.max_steps,
+        )
+        incident.investigation_runs.append(run)
+        _, runtime = self._runtime_for(incident)
+        runtime._event(incident, run.id, "RUN_QUEUED", "Investigation queued")
+        self.repository.save(incident)
+        return run
+
+    def execute_queued_run(self, incident_id: UUID, run_id: UUID) -> None:
+        incident = self.get(incident_id)
+        run = next((item for item in incident.investigation_runs if item.id == run_id), None)
+        if run is None or run.status is not AgentRunStatus.QUEUED:
+            return
+        _, runtime = self._runtime_for(incident)
+        runtime.run(incident, run)
+        self.repository.save(incident)
+
+    def cancel_run(self, incident_id: UUID, run_id: UUID) -> InvestigationRun:
+        incident = self.get(incident_id)
+        run = next((item for item in incident.investigation_runs if item.id == run_id), None)
+        if run is None:
+            raise ValueError("run not found for incident")
+        if run.status not in {AgentRunStatus.QUEUED, AgentRunStatus.RUNNING}:
+            raise ValueError(f"cannot cancel run in {run.status}")
+        with self._lock:
+            self._cancelled_runs.add(run_id)
+        run.cancellation_requested_at = datetime.now(UTC)
+        if run.status is AgentRunStatus.QUEUED:
+            run.status = AgentRunStatus.CANCELLED
+            run.cancelled_at = run.completed_at = datetime.now(UTC)
+            _, runtime = self._runtime_for(incident)
+            runtime._event(incident, run.id, "RUN_CANCELLED", "Cancelled before execution")
+            self.repository.save(incident)
+        else:
+            self.repository.save(incident)
+        return run
 
     def agent_continue(self, incident_id: UUID) -> Incident:
         return self.agent_run(incident_id)
@@ -120,7 +176,7 @@ class IncidentService:
     def investigate(self, incident_id: UUID) -> Incident:
         """Milestone 1 deterministic endpoint retained byte-for-byte in behavior."""
         incident = self.get(incident_id)
-        self._activate_scenario(incident.scenario)
+        self.registry, self.runtime = self._runtime_for(incident)
         incident.transition_to(IncidentStatus.INVESTIGATING)
         planned = self.planner.plan(incident)
         incident.investigation_plan = [f"{s.tool_name}: {s.evidence_summary}" for s in planned]
@@ -219,7 +275,7 @@ class IncidentService:
         self, incident_id: UUID, remediation_id: UUID, approved_by: str
     ) -> Incident:
         incident = self.get(incident_id)
-        self._activate_scenario(incident.scenario)
+        self.registry, self.runtime = self._runtime_for(incident)
         remediation = incident.proposed_remediation
         if (
             incident.status is not IncidentStatus.AWAITING_APPROVAL
@@ -241,23 +297,40 @@ class IncidentService:
         self.repository.save(incident)
         return incident
 
-    def _activate_scenario(self, scenario: str, force_reset: bool = False) -> None:
-        existing = self._scenario_runtimes.get(scenario)
-        if existing is None or force_reset:
+    def _new_incident_runtime(self, incident: Incident) -> tuple[ToolRegistry, AgentRuntime]:
+        if not self._base_claimed and self.registry.simulator.scenario == incident.scenario:
+            self._base_claimed = True
+            registry = self.registry
+        else:
             from relay.network.simulator import NetworkSimulator
             from relay.tools.network_tools import build_registry
 
-            registry = build_registry(NetworkSimulator(scenario), self.registry.max_retries)
-            runtime = AgentRuntime(
-                registry,
-                self.runtime.model,
-                self.runtime.max_steps,
-                self.runtime.max_repeated_calls,
-                self.runtime.context_evidence_limit,
+            registry = build_registry(
+                NetworkSimulator(incident.scenario), self.registry.max_retries
             )
-            existing = (registry, runtime)
-            self._scenario_runtimes[scenario] = existing
-        self.registry, self.runtime = existing
+        runtime = AgentRuntime(
+            registry,
+            self.runtime.model,
+            self.runtime.max_steps,
+            self.runtime.max_repeated_calls,
+            self.runtime.context_evidence_limit,
+            checkpoint=self.repository.save,
+            should_cancel=lambda run_id: run_id in self._cancelled_runs,
+        )
+        return registry, runtime
+
+    def _runtime_for(self, incident: Incident) -> tuple[ToolRegistry, AgentRuntime]:
+        existing = self._incident_runtimes.get(incident.id)
+        if existing:
+            return existing
+        existing = self._new_incident_runtime(incident)
+        # Reconstruct durable simulator state by replaying only completed, approved writes.
+        registry, _ = existing
+        for approval in incident.approval_records:
+            if approval.execution_status == "SUCCEEDED":
+                registry.execute(approval.tool_name, approval.arguments, approved=True)
+        self._incident_runtimes[incident.id] = existing
+        return existing
 
     def approve_and_remediate(self, incident_id: UUID) -> Incident:
         incident = self.get(incident_id)
@@ -274,6 +347,9 @@ class IncidentService:
             or approval.action_fingerprint != action_fingerprint(incident.id, remediation)
         ):
             raise ValueError("approval does not match the exact proposed action")
+        _, runtime = self._runtime_for(incident)
+        run = incident.investigation_runs[-1]
+        runtime._event(incident, run.id, "REMEDIATION_STARTED", remediation.description)
         incident.transition_to(IncidentStatus.REMEDIATING)
         success, _ = self._execute_and_record(
             incident,
@@ -283,11 +359,35 @@ class IncidentService:
             approved=True,
         )
         approval.execution_status = "SUCCEEDED" if success else "FAILED"
+        runtime._event(
+            incident,
+            run.id,
+            "REMEDIATION_COMPLETED",
+            "Approved remediation completed" if success else "Approved remediation failed",
+            {"success": success, "tool_call_id": str(incident.tool_calls[-1].id)},
+        )
         if not success:
             incident.transition_to(IncidentStatus.INVESTIGATING)
             return
         incident.transition_to(IncidentStatus.VERIFYING)
+        runtime._event(incident, run.id, "VERIFICATION_STARTED", "Recovery checks started")
         self._verify(incident)
+        successful = bool(incident.verification_result and incident.verification_result.successful)
+        runtime._event(
+            incident,
+            run.id,
+            "VERIFICATION_COMPLETED",
+            incident.verification_result.summary
+            if incident.verification_result
+            else "Verification failed",
+            {"successful": successful},
+        )
+        if successful:
+            run.status = AgentRunStatus.COMPLETED
+            run.completed_at = datetime.now(UTC)
+            runtime._event(
+                incident, run.id, "RUN_COMPLETED", "Remediation verified; incident resolved"
+            )
 
     def _verify(self, incident: Incident) -> None:
         checks: list[tuple[str, dict[str, Any], str]] = [

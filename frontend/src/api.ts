@@ -1,4 +1,4 @@
-import type { Evaluation, Incident, Scenario, Topology } from "./types";
+import type { Evaluation, Incident, Run, Scenario, Topology } from "./types";
 const base = import.meta.env.VITE_API_URL ?? "/api";
 export class ApiError extends Error {
   constructor(
@@ -59,10 +59,14 @@ export const api = {
       }),
     }),
   start: (id: string, planner: string) =>
-    request<Incident>(`/incidents/${id}/agent/start`, {
+    request<Run>(`/incidents/${id}/agent/start`, {
       method: "POST",
       body: JSON.stringify({ planner }),
     }),
+  cancel: (incidentId: string, runId: string) =>
+    request<Run>(`/incidents/${incidentId}/runs/${runId}/cancel`, { method: "POST" }),
+  events: (incidentId: string, runId: string, after = 0) =>
+    new EventSource(`${base}/incidents/${incidentId}/runs/${runId}/events?after=${after}`),
   approve: (incidentId: string, r: Remediation) =>
     request<Incident>(`/incidents/${incidentId}/remediations/${r.id}/approve`, {
       method: "POST",

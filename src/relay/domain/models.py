@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def utc_now() -> datetime:
@@ -21,6 +21,16 @@ class IncidentStatus(StrEnum):
     RESOLVED = "RESOLVED"
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
+
+
+class AgentRunStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    BLOCKED = "BLOCKED"
 
 
 class ApprovalState(StrEnum):
@@ -202,9 +212,22 @@ class AgentAction(BaseModel):
 
 class InvestigationRun(BaseModel):
     id: UUID = Field(default_factory=uuid4)
-    plan: list[str]
-    started_at: datetime = Field(default_factory=utc_now)
+    incident_id: UUID | None = None
+    status: AgentRunStatus = AgentRunStatus.QUEUED
+    provider: str = "deterministic"
+    model: str = "deterministic"
+    requested_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = None
     completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    cancellation_requested_at: datetime | None = None
+    current_step: int = 0
+    max_steps: int = 20
+    tool_call_count: int = 0
+    error_category: str | None = None
+    error_message: str | None = None
+    last_event_sequence: int = 0
+    plan: list[str] = Field(default_factory=list)
     outcome: str | None = None
     steps_used: int = 0
 
@@ -228,10 +251,31 @@ class InvestigationContext(BaseModel):
 
 
 class InvestigationEvent(BaseModel):
+    event_id: UUID = Field(default_factory=uuid4)
+    sequence: int = 0
+    incident_id: UUID | None = None
     run_id: UUID
-    event_type: str
-    summary: str
+    type: str = "AGENT_DECISION_RECORDED"
+    payload: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_milestone_three_event(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "event_type" in value:
+            value = dict(value)
+            value["type"] = value.pop("event_type")
+            value["payload"] = {"summary": value.pop("summary", "")}
+        return value
+
+    @property
+    def event_type(self) -> str:
+        """Compatibility alias for Milestone 3 clients."""
+        return str(self.payload.get("legacy_event_type", self.type))
+
+    @property
+    def summary(self) -> str:
+        return str(self.payload.get("summary", ""))
 
 
 class Incident(BaseModel):

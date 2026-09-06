@@ -1,9 +1,12 @@
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from relay.api.dependencies import get_incident_service, get_simulator
 from relay.api.schemas import (
@@ -18,6 +21,7 @@ from relay.domain.models import (
     Evidence,
     Hypothesis,
     Incident,
+    InvestigationRun,
     NetworkTopology,
     ProposedRemediation,
     VerificationResult,
@@ -132,11 +136,20 @@ def agent_runs(service: Service) -> list[dict[str, object]]:
                     "incident_id": str(incident.id),
                     "incident_title": incident.title,
                     "scenario": incident.scenario,
-                    "status": incident.status,
-                    "planner": "deterministic",
-                    "tool_calls": len(
-                        [a for a in incident.actions if a.run_id == run.id and a.tool_call_id]
+                    "planner": run.provider,
+                    "latest_event": next(
+                        (
+                            event.model_dump(mode="json")
+                            for event in reversed(incident.events)
+                            if event.run_id == run.id
+                        ),
+                        None,
                     ),
+                    "events": [
+                        event.model_dump(mode="json")
+                        for event in incident.events
+                        if event.run_id == run.id
+                    ],
                     "root_cause": next(
                         (h.statement for h in incident.hypotheses if h.status.value == "CONFIRMED"),
                         None,
@@ -147,7 +160,7 @@ def agent_runs(service: Service) -> list[dict[str, object]]:
                     "resolved": incident.status.value == "RESOLVED",
                 }
             )
-    return sorted(rows, key=lambda row: str(row["started_at"]), reverse=True)
+    return sorted(rows, key=lambda row: str(row["requested_at"]), reverse=True)
 
 
 @router.get("/incidents/{incident_id}", response_model=Incident)
@@ -170,13 +183,15 @@ def run_agent(incident_id: UUID, service: Service) -> Incident:
     return _agent_call(service, incident_id, continue_run=False)
 
 
-@router.post("/incidents/{incident_id}/agent/start", response_model=Incident, status_code=202)
+@router.post(
+    "/incidents/{incident_id}/agent/start", response_model=InvestigationRun, status_code=202
+)
 def start_agent(
     incident_id: UUID,
     payload: AgentRunRequest,
     background_tasks: BackgroundTasks,
     service: Service,
-) -> Incident:
+) -> InvestigationRun:
     incident = _get(service, incident_id)
     if payload.planner == "ai" and not capabilities()["ai_planner"]:
         raise HTTPException(status_code=409, detail="AI Agent mode is not configured")
@@ -184,8 +199,67 @@ def start_agent(
         raise HTTPException(
             status_code=409, detail=f"cannot investigate incident in {incident.status}"
         )
-    background_tasks.add_task(service.agent_run, incident_id)
-    return incident
+    run = service.queue_agent_run(incident_id, payload.planner)
+    background_tasks.add_task(service.execute_queued_run, incident_id, run.id)
+    return run
+
+
+@router.get("/incidents/{incident_id}/runs/{run_id}/events")
+async def run_events(
+    incident_id: UUID,
+    run_id: UUID,
+    service: Service,
+    after: int = Query(default=0, ge=0),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    try:
+        cursor = max(after, int(last_event_id or 0))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Last-Event-ID must be a sequence") from exc
+    incident = _get(service, incident_id)
+    if not any(run.id == run_id for run in incident.investigation_runs):
+        raise HTTPException(status_code=404, detail="run not found for incident")
+
+    async def stream() -> AsyncIterator[str]:
+        sequence = cursor
+        while True:
+            current = service.get(incident_id)
+            pending = [
+                event
+                for event in current.events
+                if event.run_id == run_id and event.sequence > sequence
+            ]
+            for event in pending:
+                sequence = event.sequence
+                data = event.model_dump_json()
+                yield f"id: {sequence}\ndata: {data}\n\n"
+            run = next(item for item in current.investigation_runs if item.id == run_id)
+            if run.status.value in {
+                "AWAITING_APPROVAL",
+                "COMPLETED",
+                "FAILED",
+                "CANCELLED",
+                "BLOCKED",
+            }:
+                break
+            yield ": keep-alive\n\n"
+            await asyncio.sleep(0.15)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/incidents/{incident_id}/runs/{run_id}/cancel", response_model=InvestigationRun)
+def cancel_run(incident_id: UUID, run_id: UUID, service: Service) -> InvestigationRun:
+    try:
+        return service.cancel_run(incident_id, run_id)
+    except IncidentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/incidents/{incident_id}/agent/continue", response_model=Incident)

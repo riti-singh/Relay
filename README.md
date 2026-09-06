@@ -2,7 +2,7 @@
 
 > Relay is an agentic network incident response platform that autonomously investigates connectivity failures, gathers evidence through diagnostic tools, identifies root causes, proposes human-approved remediation, and verifies recovery.
 
-Relay combines a deterministic network laboratory, bounded agent runtime, and interactive NOC console. Every structured plan, tool call, observation, hypothesis revision, approval, write, and recovery check is stored and visible.
+Relay combines an incident-isolated deterministic network laboratory, durable agent runs, a replayable event stream, and an interactive NOC console. Every structured plan, tool call, observation, hypothesis revision, approval, write, and recovery check is stored and visible; hidden model reasoning is not.
 
 ## Problem and product workflow
 
@@ -28,9 +28,9 @@ The console has real Overview, Incidents, Topology, Agent Runs, and Evaluations 
 
 These are captured from the running simulator-backed application.
 
-| Overview | Active investigation |
+| Guided Home | Active investigation |
 | --- | --- |
-| ![Relay overview](docs/screenshots/overview.jpg) | ![Relay investigation](docs/screenshots/investigation.jpg) |
+| ![Relay guided Home](docs/screenshots/home.png) | ![Relay investigation](docs/screenshots/investigation.jpg) |
 
 | Human approval | Evaluations |
 | --- | --- |
@@ -40,13 +40,15 @@ These are captured from the running simulator-backed application.
 
 ```mermaid
 flowchart TB
- UI[React + TypeScript console] -->|typed HTTP + bounded polling| API[FastAPI]
+ UI[React + TypeScript console] -->|typed HTTP + SSE replay| API[FastAPI]
  API --> SERVICE[IncidentService]
- SERVICE --> RUNTIME[AgentRuntime]
+ SERVICE --> RUNS[Durable AgentRun lifecycle]
+ RUNS --> EVENTS[(Ordered operational events)]
+ RUNS --> RUNTIME[AgentRuntime]
  RUNTIME --> PLANNER[Deterministic or OpenAI-compatible planner]
  RUNTIME --> REGISTRY[Typed tool registry]
- REGISTRY --> SIM[Network simulator]
- SERVICE --> DB[(SQLite aggregates)]
+ REGISTRY --> SIM[Incident-scoped network session]
+ SERVICE --> DB[(SQLite incident aggregates + run events)]
  EVAL[Evaluation harness] --> SERVICE
 ```
 
@@ -59,7 +61,11 @@ flowchart TB
 
 ## Agent runtime and tools
 
-The runtime receives a bounded `InvestigationContext`, requests one structured `AgentDecision`, validates it, executes only registered tools, records evidence, and maintains hypothesis revisions. It enforces a step budget and repeated-call limit. Hidden model chain-of-thought is never stored or shown.
+The runtime receives a bounded `InvestigationContext`, requests one structured `AgentDecision`, validates it, executes only registered tools, records evidence, and maintains hypothesis revisions. A durable run moves through `QUEUED → RUNNING → AWAITING_APPROVAL → COMPLETED`, with `BLOCKED`, `FAILED`, and `CANCELLED` terminal paths. It records provider/model, timestamps, current/max steps, tool-call count, errors, and the latest event sequence.
+
+Operational events are monotonically sequenced within the persisted incident aggregate. The stream includes run lifecycle, decisions, tool start/completion/failure, evidence, hypothesis revisions, remediation, approval, verification, cancellation, and completion. `GET /incidents/{incident_id}/runs/{run_id}/events` replays with `Last-Event-ID` or `after=<sequence>` and then follows new events over SSE. The payload contains structured operational facts—not hidden chain-of-thought or fake token streaming.
+
+`POST /incidents/{incident_id}/runs/{run_id}/cancel` requests cooperative cancellation. Relay checks the request between agent steps, never interrupts an in-flight write, persists the cancellation, and keeps remediation idempotency and exact-action approval intact.
 
 Deterministic mode needs no external service. AI Agent mode uses an OpenAI-compatible Responses API adapter when configured; credentials stay backend-only and the UI disables this mode when unavailable.
 
@@ -67,7 +73,19 @@ Writes cannot execute without approval. A remediation stores the exact tool and 
 
 ## Network simulator
 
-Relay models branch and core routers, a service, interfaces, routes, ACLs, configuration baselines, DNS, latency, and packet loss. Scenarios are Interface Disabled, Incorrect Static Route, ACL Blocking Application Traffic, DNS Failure, Congested Link, and Configuration Drift. Descriptions are shown to the user; expected root causes remain in the evaluation harness.
+Relay models branch and core routers, a service, interfaces, routes, ACLs, configuration baselines, DNS, latency, and packet loss. Every incident receives its own simulator session, so reads and writes cannot leak across incidents. After service reconstruction, Relay rebuilds the scenario and replays only successfully completed, approved writes. The adapter boundary remains the typed tool registry, suitable for a future real-device implementation.
+
+## Guided onboarding and demo
+
+The Home route explains the product, investigation modes, approval boundary, verification, and primary product areas. A dismissible first-run checklist is stored in the browser and can be rediscovered from Home. Concise page introductions, accessible info tooltips, staged incident progression, and action-oriented empty states keep the technical depth available without requiring the README.
+
+1. Select **Start an investigation** on Home.
+2. Inject one of the six simulated failures.
+3. Choose **Deterministic** for reproducible execution or **AI Agent** when configured.
+4. Watch durable events add decisions, tool calls, evidence, and hypotheses live.
+5. Inspect the exact tool, affected resource, and arguments; approve the fingerprinted action.
+6. Watch scenario-relevant verification prove recovery.
+7. Replay the execution from **Agent Runs**.
 
 ## Example investigation
 
@@ -126,7 +144,7 @@ Provider settings are documented in `.env.example`. The integration suite exerci
 
 ## Demo
 
-1. Open **Incidents** and inject **Interface Disabled**.
+1. Open **Home**, then select **Start an investigation** and inject **Interface Disabled**.
 2. Choose **Deterministic** and start the investigation.
 3. Expand tool calls and inspect evidence-linked topology and hypotheses.
 4. Review and approve the exact remediation.
@@ -134,13 +152,14 @@ Provider settings are documented in `.env.example`. The integration suite exerci
 
 ## Known limitations and roadmap
 
-- The simulator is intended for deterministic demonstrations, not concurrent production control.
-- Short local runs use bounded polling; distributed workers should use a durable SSE event stream.
+- Execution uses FastAPI in-process background tasks rather than an external worker queue; a process crash can leave a run marked `RUNNING` for operator inspection.
+- SSE is backed by persisted aggregate events and local follow loops; horizontal fan-out would require a shared notification mechanism.
+- Simulator reconstruction replays approved writes; it does not preserve transient counters or injected one-shot tool failures.
 - The deterministic planner favors reproducibility over minimizing scenario-specific calls.
 - Full workflow coverage is API integration plus component tests; Playwright is intentionally not added yet.
 - Authentication, production integrations, and arbitrary shell execution are out of scope.
 
-Milestone 4 should add queued execution, SSE delivery, cancellation, incident-scoped simulator sessions, and replayable event storage before authenticated, read-only production telemetry integrations.
+The next milestone should add authentication/RBAC, production read-only telemetry adapters, worker leasing/recovery for orphaned runs, and a shared event notification layer before horizontal deployment.
 
 ## License
 
