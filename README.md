@@ -2,7 +2,7 @@
 
 > Relay is an agentic network incident response platform that autonomously investigates connectivity failures, gathers evidence through diagnostic tools, identifies root causes, proposes human-approved remediation, and verifies recovery.
 
-Relay combines an incident-isolated deterministic network laboratory, durable agent runs, a replayable event stream, and an interactive NOC console. Every structured plan, tool call, observation, hypothesis revision, approval, write, and recovery check is stored and visible; hidden model reasoning is not.
+Relay combines an incident-isolated deterministic network laboratory, read-only external telemetry, durable agent runs, a replayable event stream, and an interactive NOC console. Every structured plan, tool call, observation, hypothesis revision, approval, write, and recovery check is stored and visible; hidden model reasoning is not.
 
 ## Problem and product workflow
 
@@ -47,13 +47,17 @@ flowchart TB
  RUNS --> RUNTIME[AgentRuntime]
  RUNTIME --> PLANNER[Deterministic or OpenAI-compatible planner]
  RUNTIME --> REGISTRY[Typed tool registry]
- REGISTRY --> SIM[Incident-scoped network session]
+ REGISTRY --> ADAPTER[Typed NetworkAdapter]
+ ADAPTER --> SIM[LAB: incident-scoped simulator]
+ ADAPTER --> HTTP[OBSERVE: structured HTTP telemetry]
+ HTTP --> FIXTURE[Local fixture telemetry service]
  SERVICE --> DB[(SQLite incident aggregates + run events)]
  EVAL[Evaluation harness] --> SERVICE
 ```
 
 - `src/relay/domain`: incident, topology, evidence, hypothesis, run, approval, and verification models.
 - `src/relay/network`: deterministic topology and six injected failures.
+- `src/relay/adapters`: provider-neutral adapter contract, simulator and HTTP implementations, capabilities, and optional source composition.
 - `src/relay/tools`: validated tools with risk, retries, and approval enforcement.
 - `src/relay/agent`: structured planner abstraction and bounded runtime.
 - `src/relay/services`: orchestration, persistence, remediation, and verification.
@@ -71,9 +75,29 @@ Deterministic mode needs no external service. AI Agent mode uses an OpenAI-compa
 
 Writes cannot execute without approval. A remediation stores the exact tool and arguments. Approval records a SHA-256 fingerprint over the incident, remediation, tool, and canonical arguments; Relay recomputes it immediately before execution. The UI never sends arbitrary tool calls.
 
+## LAB and OBSERVE modes
+
+`LAB` investigates an incident-isolated deterministic simulator. Its existing six scenarios, exact-action approval, guarded remediation, verification, and evaluation behavior are preserved.
+
+`OBSERVE` investigates external telemetry through the same `AgentRuntime` and tool names, but its registry contains no write tools. Approval and remediation endpoints independently reject OBSERVE incidents and append an `OBSERVE_WRITE_REJECTED` audit event. There is no shell, arbitrary-command, or hidden production-write path.
+
+The operating mode and data-source IDs are persisted on the incident and every agent run, included in operational events, and displayed in the console.
+
+## Adapter and capability model
+
+`NetworkAdapter` is a framework-neutral interface for a finite `DiagnosticOperation` set: topology, interface state, routes, reachability, DNS, service connectivity, policy, link metrics, packet loss, configuration, recent changes, and inventory. `SimulatorNetworkAdapter` implements it for LAB; `HTTPTelemetryAdapter` consumes a versioned structured JSON/HTTP contract.
+
+Adapters declare `AdapterCapability` values. Queries return `SUCCESS`, `UNSUPPORTED`, `UNAVAILABLE`, `STALE`, or `FAILED`; Relay records missing observations explicitly and never fabricates an answer. `CompositeNetworkAdapter` provides a small ordered multi-source boundary without introducing a distributed data platform.
+
+## Inventory, provenance, and freshness
+
+`GET /inventory?source_id=...` returns vendor-neutral devices, interfaces, services, and links with stable IDs, optional management metadata, labels, status, telemetry source, and last-observed time. `GET /integrations` lists connection state, read-only status, capabilities, and last observation.
+
+Every evidence item records source type, adapter, resource ID, source observation time, collection time, freshness, query identity, tool-call ID, and run ID. Provider metadata is normalized and credentials are never persisted or returned. The HTTP adapter compares timestamps with `RELAY_TELEMETRY_FRESHNESS_SECONDS`; stale values remain visible but are excluded from root-cause evidence. Unavailable means the source could not answer, not that the tested condition was false.
+
 ## Network simulator
 
-Relay models branch and core routers, a service, interfaces, routes, ACLs, configuration baselines, DNS, latency, and packet loss. Every incident receives its own simulator session, so reads and writes cannot leak across incidents. After service reconstruction, Relay rebuilds the scenario and replays only successfully completed, approved writes. The adapter boundary remains the typed tool registry, suitable for a future real-device implementation.
+Relay models branch and core routers, a service, interfaces, routes, ACLs, configuration baselines, DNS, latency, and packet loss. Every incident receives its own simulator session, so reads and writes cannot leak across incidents. After service reconstruction, Relay rebuilds the scenario and replays only successfully completed, approved writes. The simulator implements the same adapter contract as external sources, while writes remain simulator-only.
 
 ## Guided onboarding and demo
 
@@ -150,6 +174,29 @@ Provider settings are documented in `.env.example`. The integration suite exerci
 4. Review and approve the exact remediation.
 5. Watch recovery checks complete before `RESOLVED`.
 
+### Local external-telemetry demo
+
+Run `docker compose up --build`; this starts Relay plus a separate fixture telemetry HTTP service on port 8001.
+
+1. Open **Incidents**, select **OBSERVE**, and choose a local structured HTTP dataset.
+2. Choose **External interface failure**, **External route anomaly**, or **External degraded link**.
+3. Start the investigation and watch the same runtime query external telemetry.
+4. Inspect evidence provider, resource, source timestamp, and freshness.
+5. Review the root-cause assessment and read-only explanation. Approval and remediation controls are unavailable.
+
+The fixture service also has healthy and stale-link datasets. It speaks the external HTTP contract and does not read simulator state.
+
+## Adding a telemetry adapter
+
+Implement `NetworkAdapter` under `src/relay/adapters`, declare only the capabilities the provider truly supports, and normalize every result into `AdapterObservation` with provenance and a source timestamp. Implement vendor-neutral inventory and topology, register a factory by source ID, and build its registry with `include_writes=False`. `AgentRuntime` needs no provider-specific changes: it receives the same tool schemas and normalized evidence for every adapter.
+
+Add contract, timeout, malformed-response, freshness, and safety cases to the separate adapter evaluation:
+
+```bash
+make eval          # six deterministic LAB scenarios
+make adapter-eval  # read-only HTTP fixture telemetry
+```
+
 ## Known limitations and roadmap
 
 - Execution uses FastAPI in-process background tasks rather than an external worker queue; a process crash can leave a run marked `RUNNING` for operator inspection.
@@ -157,9 +204,12 @@ Provider settings are documented in `.env.example`. The integration suite exerci
 - Simulator reconstruction replays approved writes; it does not preserve transient counters or injected one-shot tool failures.
 - The deterministic planner favors reproducibility over minimizing scenario-specific calls.
 - Full workflow coverage is API integration plus component tests; Playwright is intentionally not added yet.
-- Authentication, production integrations, and arbitrary shell execution are out of scope.
+- The HTTP adapter currently targets the bounded structured telemetry contract; Prometheus query templates, authentication/RBAC, and secret-manager integration remain future work.
+- OBSERVE deliberately cannot remediate. Completion means a root-cause assessment, not that the external fault was repaired.
+- Inventory is queried on demand and evidence is stored in incident aggregates; Relay is not a telemetry warehouse.
+- Arbitrary shell execution is intentionally unsupported.
 
-The next milestone should add authentication/RBAC, production read-only telemetry adapters, worker leasing/recovery for orphaned runs, and a shared event notification layer before horizontal deployment.
+The next milestone should add authentication/RBAC, production provider query templates, worker leasing/recovery for orphaned runs, and a shared event notification layer before horizontal deployment.
 
 ## License
 

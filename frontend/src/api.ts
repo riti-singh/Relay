@@ -1,4 +1,4 @@
-import type { Evaluation, Incident, Run, Scenario, Topology } from "./types";
+import type { Evaluation, Incident, Integration, Run, Scenario, Topology } from "./types";
 const base = import.meta.env.VITE_API_URL ?? "/api";
 export class ApiError extends Error {
   constructor(
@@ -33,6 +33,8 @@ export const api = {
   incidents: () => request<Incident[]>("/incidents"),
   incident: (id: string) => request<Incident>(`/incidents/${id}`),
   scenarios: () => request<Scenario[]>("/scenarios"),
+  observeDatasets: () => request<Scenario[]>("/observe/datasets"),
+  integrations: () => request<Integration[]>("/integrations"),
   topology: (id?: string) =>
     request<Topology>(
       id ? `/network/topology/incident/${id}` : "/network/topology",
@@ -47,7 +49,7 @@ export const api = {
   dashboard: () => request<Record<string, unknown>>("/dashboard/summary"),
   evaluations: () => request<Evaluation>("/evaluations/latest"),
   runs: () => request<Record<string, unknown>[]>("/agent-runs"),
-  create: (scenario: Scenario) =>
+  create: (scenario: Scenario, operatingMode: "LAB" | "OBSERVE" = "LAB") =>
     request<Incident>("/incidents", {
       method: "POST",
       body: JSON.stringify({
@@ -56,6 +58,9 @@ export const api = {
         source_device: scenario.source_device,
         destination_device: scenario.destination_device,
         scenario: scenario.id,
+        operating_mode: operatingMode,
+        data_source_ids: operatingMode === "LAB" ? ["lab-simulator"] : ["fixture-http"],
+        resource_ids: [scenario.source_device, scenario.destination_device],
       }),
     }),
   start: (id: string, planner: string) =>

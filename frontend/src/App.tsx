@@ -19,6 +19,7 @@ import {
   Overview,
   Runs,
   TopologyPage,
+  Integrations,
 } from "./pages";
 export default function App() {
   return (
@@ -54,6 +55,10 @@ export default function App() {
             <ListChecks />
             Agent Runs
           </NavLink>
+          <NavLink to="/integrations">
+            <Radio />
+            Data Sources
+          </NavLink>
           <NavLink to="/evaluations">
             <BarChart3 />
             Evaluations
@@ -81,6 +86,7 @@ export default function App() {
           <Route path="/incidents/:id" element={<IncidentPage />} />
           <Route path="/topology" element={<TopologyPage />} />
           <Route path="/runs" element={<Runs />} />
+          <Route path="/integrations" element={<Integrations />} />
           <Route path="/evaluations" element={<Evaluations />} />
         </Routes>
       </main>

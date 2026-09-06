@@ -1,4 +1,4 @@
-.PHONY: install run test lint typecheck eval check frontend-install frontend-run frontend-test frontend-build
+.PHONY: install run test lint typecheck eval adapter-eval check frontend-install frontend-run frontend-test frontend-build
 
 install:
 	python3.12 -m venv .venv
@@ -19,6 +19,9 @@ typecheck:
 
 eval:
 	.venv/bin/python -m relay.eval --output evaluation-results.json
+
+adapter-eval:
+	.venv/bin/python -m relay.adapter_eval --output adapter-evaluation-results.json
 
 check: lint typecheck test
 

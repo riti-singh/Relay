@@ -5,11 +5,25 @@ services:
       - "8000:8000"
     environment:
       RELAY_DATABASE_PATH: /app/data/relay.db
+      RELAY_FIXTURE_TELEMETRY_URL: http://fixture-telemetry:8001
     volumes:
       - relay-data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      fixture-telemetry:
+        condition: service_healthy
+  fixture-telemetry:
+    build: .
+    command: ["uvicorn", "relay.fixture_service:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 5s
       timeout: 3s
       retries: 5
   frontend:

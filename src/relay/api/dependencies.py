@@ -1,8 +1,10 @@
 from functools import lru_cache
 
+from relay.adapters.http_telemetry import HTTPTelemetryAdapter
 from relay.agent.planner import AgentModel, DeterministicPlanner, OpenAICompatibleAgentModel
 from relay.agent.runtime import AgentRuntime
 from relay.config import get_settings
+from relay.domain.models import AdapterCapability
 from relay.network.simulator import NetworkSimulator
 from relay.repositories.incidents import SQLiteIncidentRepository
 from relay.services.incidents import IncidentService
@@ -35,7 +37,34 @@ def get_incident_service() -> IncidentService:
         settings.max_investigation_steps,
         settings.max_repeated_tool_calls,
     )
-    service = IncidentService(repository, registry, deterministic, runtime)
+    external_capabilities = frozenset(
+        {
+            AdapterCapability.TOPOLOGY,
+            AdapterCapability.INVENTORY,
+            AdapterCapability.REACHABILITY,
+            AdapterCapability.INTERFACE_STATE,
+            AdapterCapability.ROUTES,
+            AdapterCapability.LINK_METRICS,
+            AdapterCapability.PACKET_LOSS,
+        }
+    )
+    service = IncidentService(
+        repository,
+        registry,
+        deterministic,
+        runtime,
+        adapter_factories={
+            "fixture-http": lambda incident: HTTPTelemetryAdapter(
+                "fixture-http",
+                "Local structured HTTP telemetry",
+                settings.fixture_telemetry_url,
+                incident.scenario,
+                external_capabilities,
+                settings.telemetry_timeout_seconds,
+                settings.telemetry_freshness_seconds,
+            )
+        },
+    )
     if settings.seed_demo_data and not service.list():
         _seed_demo_data(service)
     return service

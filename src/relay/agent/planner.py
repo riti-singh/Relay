@@ -11,9 +11,11 @@ from pydantic import ValidationError
 from relay.domain.models import (
     ActionKind,
     AgentDecision,
+    Freshness,
     HypothesisStatus,
     Incident,
     InvestigationContext,
+    OperatingMode,
 )
 
 
@@ -62,31 +64,54 @@ class DeterministicPlanner:
     async def decide_next_action(self, context: InvestigationContext) -> AgentDecision:
         done = [call.tool_name for call in context.recent_tool_calls]
         endpoints = {"source": context.source_device, "destination": context.destination_device}
-        sequence: list[tuple[str, dict[str, Any], str]] = [
-            ("get_network_topology", {}, "Capture bounded topology"),
-            ("ping", endpoints, "Test IP reachability"),
-            ("traceroute", endpoints, "Locate path failure"),
-            ("get_route_table", {"device_id": context.source_device}, "Inspect source route"),
-            (
-                "get_interface_status",
-                {"device_id": "core-router-02", "interface_name": "eth1"},
-                "Inspect branch uplink",
-            ),
-            ("test_tcp_connection", {**endpoints, "port": 443}, "Test application service"),
-            ("resolve_dns", {"hostname": "payments.internal"}, "Test service DNS"),
-            ("get_acl_rules", {"device_id": "core-router-02"}, "Inspect traffic policy"),
-            (
-                "get_link_metrics",
-                {"device_a": "branch-03", "device_b": "core-router-02"},
-                "Inspect link health",
-            ),
-            ("get_packet_loss", endpoints, "Measure packet loss"),
-            (
-                "compare_config_to_baseline",
-                {"device_id": "core-router-02"},
-                "Check configuration drift",
-            ),
-        ]
+        if context.operating_mode is OperatingMode.OBSERVE:
+            sequence: list[tuple[str, dict[str, Any], str]] = [
+                ("get_network_topology", {}, "Capture external topology"),
+                ("ping", endpoints, "Test observed reachability"),
+                ("traceroute", endpoints, "Locate observed path failure"),
+                (
+                    "get_route_table",
+                    {"device_id": context.source_device},
+                    "Inspect observed source route",
+                ),
+                (
+                    "get_interface_status",
+                    {"device_id": "core-01", "interface_name": "eth1"},
+                    "Inspect observed uplink",
+                ),
+                (
+                    "get_link_metrics",
+                    {"device_a": context.source_device, "device_b": "core-01"},
+                    "Inspect observed link health",
+                ),
+                ("get_packet_loss", endpoints, "Measure observed packet loss"),
+            ]
+        else:
+            sequence = [
+                ("get_network_topology", {}, "Capture bounded topology"),
+                ("ping", endpoints, "Test IP reachability"),
+                ("traceroute", endpoints, "Locate path failure"),
+                ("get_route_table", {"device_id": context.source_device}, "Inspect source route"),
+                (
+                    "get_interface_status",
+                    {"device_id": "core-router-02", "interface_name": "eth1"},
+                    "Inspect branch uplink",
+                ),
+                ("test_tcp_connection", {**endpoints, "port": 443}, "Test application service"),
+                ("resolve_dns", {"hostname": "payments.internal"}, "Test service DNS"),
+                ("get_acl_rules", {"device_id": "core-router-02"}, "Inspect traffic policy"),
+                (
+                    "get_link_metrics",
+                    {"device_a": "branch-03", "device_b": "core-router-02"},
+                    "Inspect link health",
+                ),
+                ("get_packet_loss", endpoints, "Measure packet loss"),
+                (
+                    "compare_config_to_baseline",
+                    {"device_id": "core-router-02"},
+                    "Check configuration drift",
+                ),
+            ]
         for name, arguments, summary in sequence:
             if name not in done:
                 return AgentDecision(
@@ -104,6 +129,14 @@ class DeterministicPlanner:
                 hypothesis_status=HypothesisStatus.CONFIRMED,
                 supporting_evidence_ids=[e.id for e in context.evidence],
             )
+        if context.operating_mode is OperatingMode.OBSERVE:
+            return AgentDecision(
+                kind=ActionKind.DECLARE_RESOLVED,
+                summary=(
+                    "Read-only root-cause assessment completed; remediation is intentionally "
+                    "unavailable in OBSERVE mode"
+                ),
+            )
         return AgentDecision(
             kind=ActionKind.PROPOSE_REMEDIATION,
             summary="Propose evidence-backed remediation",
@@ -114,9 +147,10 @@ class DeterministicPlanner:
 
     @staticmethod
     def _finding(context: InvestigationContext) -> tuple[str, str, str, dict[str, Any], str]:
+        valid_evidence = [e for e in context.evidence if e.provenance.freshness is Freshness.FRESH]
         observations = {
             c.tool_name: next(
-                (e.observation for e in reversed(context.evidence) if e.tool_call_id == c.id), {}
+                (e.observation for e in reversed(valid_evidence) if e.tool_call_id == c.id), {}
             )
             for c in context.recent_tool_calls
         }
@@ -127,6 +161,55 @@ class DeterministicPlanner:
         acl = observations.get("get_acl_rules", {}).get("rules", [])
         metrics = observations.get("get_link_metrics", {})
         config = observations.get("compare_config_to_baseline", {})
+        if context.operating_mode is OperatingMode.OBSERVE:
+            topology = observations.get("get_network_topology", {})
+            down = next(
+                (
+                    f"{d['id']}/{i['name']}"
+                    for d in topology.get("devices", [])
+                    for i in d.get("interfaces", [])
+                    if i.get("operational_up") is False
+                ),
+                None,
+            )
+            if down:
+                return (
+                    f"{down} is operationally down",
+                    down,
+                    "",
+                    {},
+                    "OBSERVE mode does not permit remediation",
+                )
+            if route.get(context.destination_device) in {None, "discard"}:
+                return (
+                    (
+                        f"{context.source_device} has an anomalous route to "
+                        f"{context.destination_device}"
+                    ),
+                    f"{context.source_device} route",
+                    "",
+                    {},
+                    "OBSERVE mode does not permit remediation",
+                )
+            if metrics.get("packet_loss_percent", 0) > 5 or metrics.get("latency_ms", 0) > 100:
+                component = f"{context.source_device}/core-01 link"
+                return (
+                    f"{component} is degraded",
+                    component,
+                    "",
+                    {},
+                    "OBSERVE mode does not permit remediation",
+                )
+            ping = observations.get("ping", {})
+            if ping.get("reachable") is True:
+                return (
+                    "No active network fault detected in fresh telemetry",
+                    context.destination_device,
+                    "",
+                    {},
+                    "No remediation required",
+                )
+            raise AgentModelError("fresh external telemetry does not identify a root cause")
         if interface.get("admin_up") is False:
             return (
                 "core-router-02/eth1 is administratively disabled",

@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     max_tool_retries: int = 1
     evaluation_results_path: str = "evaluation-results.json"
     seed_demo_data: bool = True
+    fixture_telemetry_url: str = "http://localhost:8001"
+    telemetry_timeout_seconds: float = 3
+    telemetry_freshness_seconds: int = 60
     model_config = SettingsConfigDict(env_prefix="RELAY_", env_file=".env")
 
 
