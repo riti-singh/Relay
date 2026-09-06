@@ -1,4 +1,4 @@
-.PHONY: install run test lint typecheck eval check
+.PHONY: install run test lint typecheck eval check frontend-install frontend-run frontend-test frontend-build
 
 install:
 	python3.12 -m venv .venv
@@ -21,3 +21,15 @@ eval:
 	.venv/bin/python -m relay.eval --output evaluation-results.json
 
 check: lint typecheck test
+
+frontend-install:
+	cd frontend && pnpm install
+
+frontend-run:
+	cd frontend && pnpm dev
+
+frontend-test:
+	cd frontend && pnpm test
+
+frontend-build:
+	cd frontend && pnpm build

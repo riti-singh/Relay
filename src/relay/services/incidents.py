@@ -14,7 +14,9 @@ from relay.domain.models import (
     HypothesisStatus,
     Incident,
     IncidentStatus,
+    InvestigationEvent,
     InvestigationRun,
+    NetworkTopology,
     ProposedRemediation,
     ToolCall,
     VerificationResult,
@@ -78,6 +80,32 @@ class IncidentService:
 
     def list(self) -> list[Incident]:
         return self.repository.list()
+
+    def reset_scenario(self, scenario: str) -> None:
+        self._activate_scenario(scenario, force_reset=True)
+
+    def topology_for_incident(self, incident_id: UUID) -> NetworkTopology:
+        incident = self.get(incident_id)
+        self._activate_scenario(incident.scenario)
+        return self.registry.simulator.topology()
+
+    def reject_remediation(self, incident_id: UUID, rejected_by: str, reason: str) -> Incident:
+        incident = self.get(incident_id)
+        if incident.status is not IncidentStatus.AWAITING_APPROVAL:
+            raise ValueError("incident has no remediation awaiting approval")
+        incident.approval_state = ApprovalState.REJECTED
+        incident.events.append(
+            InvestigationEvent(
+                run_id=incident.investigation_runs[-1].id,
+                event_type="remediation_rejected",
+                summary=f"{rejected_by} rejected remediation: {reason}",
+            )
+        )
+        incident.proposed_remediation = None
+        incident.status = IncidentStatus.INVESTIGATING
+        incident.updated_at = datetime.now(UTC)
+        self.repository.save(incident)
+        return incident
 
     def agent_run(self, incident_id: UUID) -> Incident:
         incident = self.get(incident_id)
@@ -213,9 +241,9 @@ class IncidentService:
         self.repository.save(incident)
         return incident
 
-    def _activate_scenario(self, scenario: str) -> None:
+    def _activate_scenario(self, scenario: str, force_reset: bool = False) -> None:
         existing = self._scenario_runtimes.get(scenario)
-        if existing is None:
+        if existing is None or force_reset:
             from relay.network.simulator import NetworkSimulator
             from relay.tools.network_tools import build_registry
 

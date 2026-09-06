@@ -12,3 +12,8 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts

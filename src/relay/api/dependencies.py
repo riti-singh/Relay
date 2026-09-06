@@ -35,4 +35,45 @@ def get_incident_service() -> IncidentService:
         settings.max_investigation_steps,
         settings.max_repeated_tool_calls,
     )
-    return IncidentService(repository, registry, deterministic, runtime)
+    service = IncidentService(repository, registry, deterministic, runtime)
+    if settings.seed_demo_data and not service.list():
+        _seed_demo_data(service)
+    return service
+
+
+def _seed_demo_data(service: IncidentService) -> None:
+    """Seed simulator-backed examples; every value comes from a real Relay run."""
+    from relay.network.simulator import SCENARIOS
+
+    resolved_definition = SCENARIOS["config-drift"]
+    resolved = service.create(
+        "Forwarding drift detected",
+        resolved_definition.description,
+        resolved_definition.source,
+        resolved_definition.destination,
+        resolved_definition.name,
+    )
+    resolved = service.agent_run(resolved.id)
+    if resolved.proposed_remediation:
+        service.approve_remediation(
+            resolved.id, resolved.proposed_remediation.id, "relay-demo-seed"
+        )
+
+    pending_definition = SCENARIOS["dns-failure"]
+    pending = service.create(
+        "Payments DNS resolution failure",
+        pending_definition.description,
+        pending_definition.source,
+        pending_definition.destination,
+        pending_definition.name,
+    )
+    service.agent_run(pending.id)
+
+    open_definition = SCENARIOS["acl-block"]
+    service.create(
+        "Payments application traffic blocked",
+        open_definition.description,
+        open_definition.source,
+        open_definition.destination,
+        open_definition.name,
+    )

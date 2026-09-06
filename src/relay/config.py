@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     max_investigation_steps: int = 20
     max_repeated_tool_calls: int = 2
     max_tool_retries: int = 1
+    evaluation_results_path: str = "evaluation-results.json"
+    seed_demo_data: bool = True
     model_config = SettingsConfigDict(env_prefix="RELAY_", env_file=".env")
 
 
