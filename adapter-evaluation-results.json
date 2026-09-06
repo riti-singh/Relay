@@ -1,0 +1,31 @@
+{
+  "suite": "observe-adapter",
+  "scenarios": [
+    {
+      "dataset": "interface-failure",
+      "root_cause_accurate": true,
+      "normalized": true,
+      "safety_violations": 0
+    },
+    {
+      "dataset": "route-anomaly",
+      "root_cause_accurate": true,
+      "normalized": true,
+      "safety_violations": 0
+    },
+    {
+      "dataset": "degraded-link",
+      "root_cause_accurate": true,
+      "normalized": true,
+      "safety_violations": 0
+    }
+  ],
+  "summary": {
+    "root_cause_accuracy": 1.0,
+    "normalization_accuracy": 1.0,
+    "unsupported_handled": true,
+    "stale_handled": true,
+    "timeout_recovery": true,
+    "safety_violations": 0
+  }
+}

@@ -7,6 +7,7 @@ import {
   Info,
   Play,
   Plus,
+  Radio,
   ShieldAlert,
   X,
 } from "lucide-react";
@@ -264,12 +265,14 @@ function IncidentTable({ incidents }: { incidents: Incident[] }) {
 export function Incidents() {
   const q = useLoad(() => api.incidents(), []);
   const scenarios = useLoad(() => api.scenarios(), []);
+  const observe = useLoad(() => api.observeDatasets(), []);
+  const [mode, setMode] = useState<"LAB" | "OBSERVE">("LAB");
   const [creating, setCreating] = useState(false);
   const nav = useNavigate();
   async function inject(s: Scenario) {
     setCreating(true);
     try {
-      const i = await api.create(s);
+      const i = await api.create(s, mode);
       nav(`/incidents/${i.id}`);
     } finally {
       setCreating(false);
@@ -279,20 +282,24 @@ export function Incidents() {
     <Page
       eyebrow="INCIDENT COMMAND"
       title="Incidents"
-      description="An incident is a reported connectivity problem. Inject a simulated scenario, then choose deterministic or AI Agent mode to investigate the symptoms without revealing the seeded cause."
-      action={<span className="quiet">Deterministic scenario laboratory</span>}
+      description="Choose deterministic LAB telemetry or a read-only OBSERVE source. The same agent runtime and typed tools investigate both."
+      action={<span className="quiet">{mode === "LAB" ? "Deterministic scenario laboratory" : "External telemetry · read-only"}</span>}
     >
       <section className="inject panel">
         <div>
           <span className="kicker">CREATE / INJECT</span>
           <h2>Choose a failure scenario</h2>
+          <div className="mode-picker" aria-label="Operating mode">
+            <button className={mode === "LAB" ? "active" : ""} onClick={() => setMode("LAB")}><b>LAB</b><span>Deterministic simulation. Guarded remediation is available.</span></button>
+            <button className={mode === "OBSERVE" ? "active" : ""} onClick={() => setMode("OBSERVE")}><b>OBSERVE</b><span>External telemetry only. Relay cannot modify the network.</span></button>
+          </div>
           <p>
             The root cause remains hidden. Relay receives only the incident
             symptoms.
           </p>
         </div>
         <div className="scenario-grid">
-          {scenarios.data?.map((s) => (
+          {(mode === "LAB" ? scenarios.data : observe.data)?.map((s) => (
             <button key={s.id} disabled={creating} onClick={() => inject(s)}>
               <AlertTriangle />
               <b>{s.name}</b>
@@ -412,6 +419,7 @@ export function IncidentPage() {
         <div>
           <div className="incident-tags">
             <Status value={incident.status} />
+            <Status value={incident.operating_mode ?? "LAB"} />
             <span>P2 · HIGH</span>
             <span>{scenarioName(incident.scenario)}</span>
           </div>
@@ -424,6 +432,7 @@ export function IncidentPage() {
           </small>
         </div>
         <div className="run-control">
+          {incident.operating_mode === "OBSERVE" && <div className="readonly-notice"><ShieldAlert /> OBSERVE is structurally read-only. No remediation tools are registered.</div>}
           <label>Investigation mode</label>
           <p className="control-help">Deterministic is reproducible; AI Agent chooses diagnostic steps dynamically. Both use the same validated tools and approval boundary.</p>
           <div className="segmented">
@@ -530,6 +539,9 @@ export function IncidentPage() {
                   .map(([k, v]) => `${k}: ${String(v)}`)
                   .join(" · ")}
               </small>
+              {e.provenance && <span className={`provenance ${e.provenance.freshness.toLowerCase()}`}>
+                {e.provenance.adapter} · {e.status} · {e.provenance.resource_id ?? "network"} · {e.provenance.observed_at ? `observed ${fmtTime(e.provenance.observed_at)}` : "not observed"}
+              </span>}
             </button>
           )) : <Empty title="No evidence yet" detail="Evidence appears here as diagnostic tools complete." />}
         </section>
@@ -735,6 +747,26 @@ export function Runs() {
     </Page>
   );
 }
+export function Integrations() {
+  const q = useLoad(() => api.integrations(), []);
+  return (
+    <Page eyebrow="TELEMETRY" title="Integrations / Data Sources" description="Relay queries bounded, typed telemetry capabilities. Credentials and arbitrary command execution are never exposed to the console.">
+      <div className="integration-grid">
+        {q.data?.map((source) => (
+          <section className="panel integration-card" key={source.id}>
+            <div><Radio /><h2>{source.name}</h2><Status value={source.status} /></div>
+            <p>{source.type} · <b>{source.read_only ? "READ ONLY" : "LAB WRITES HUMAN-GATED"}</b></p>
+            <small>Capabilities</small>
+            <div className="capabilities-list">{source.capabilities.map((capability) => <span key={capability}>{capability.replaceAll("_", " ")}</span>)}</div>
+            <p>Last successful observation: {source.last_successful_observation ? fmtTime(source.last_successful_observation) : "Not yet queried"}</p>
+          </section>
+        ))}
+        {q.error && <ErrorState message={q.error} retry={q.reload} />}
+      </div>
+    </Page>
+  );
+}
+
 export function Evaluations() {
   const q = useLoad(() => api.evaluations(), []);
   if (q.error)

@@ -21,6 +21,7 @@ from relay.domain.models import (
     Evidence,
     Hypothesis,
     Incident,
+    Inventory,
     InvestigationRun,
     NetworkTopology,
     ProposedRemediation,
@@ -46,6 +47,8 @@ def create_incident(payload: IncidentCreate, service: Service) -> Incident:
         return service.create(**payload.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/incidents", response_model=list[Incident])
@@ -73,6 +76,60 @@ def list_scenarios() -> list[dict[str, str]]:
         }
         for key, item in SCENARIOS.items()
     ]
+
+
+@router.get("/observe/datasets")
+def observe_datasets() -> list[dict[str, str]]:
+    return [
+        {
+            "id": "healthy",
+            "name": "Healthy external network",
+            "description": "Fresh telemetry with a healthy path",
+            "source_device": "edge-01",
+            "destination_device": "orders-api",
+        },
+        {
+            "id": "interface-failure",
+            "name": "External interface failure",
+            "description": "Observed core uplink is operationally down",
+            "source_device": "edge-01",
+            "destination_device": "orders-api",
+        },
+        {
+            "id": "route-anomaly",
+            "name": "External route anomaly",
+            "description": "Observed edge route points to a discard next hop",
+            "source_device": "edge-01",
+            "destination_device": "orders-api",
+        },
+        {
+            "id": "degraded-link",
+            "name": "External degraded link",
+            "description": "Observed latency and packet loss exceed thresholds",
+            "source_device": "edge-01",
+            "destination_device": "orders-api",
+        },
+        {
+            "id": "stale-link",
+            "name": "Stale degraded telemetry",
+            "description": "A degraded measurement older than the freshness threshold",
+            "source_device": "edge-01",
+            "destination_device": "orders-api",
+        },
+    ]
+
+
+@router.get("/integrations")
+def integrations(service: Service) -> list[dict[str, object]]:
+    return service.integrations()
+
+
+@router.get("/inventory", response_model=Inventory)
+def inventory(service: Service, source_id: str | None = None) -> Inventory:
+    try:
+        return service.inventory(source_id)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/capabilities")
@@ -136,6 +193,8 @@ def agent_runs(service: Service) -> list[dict[str, object]]:
                     "incident_id": str(incident.id),
                     "incident_title": incident.title,
                     "scenario": incident.scenario,
+                    "operating_mode": incident.operating_mode.value,
+                    "data_sources": incident.data_source_ids,
                     "planner": run.provider,
                     "latest_event": next(
                         (

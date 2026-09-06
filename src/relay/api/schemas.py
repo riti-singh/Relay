@@ -2,6 +2,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from relay.domain.models import OperatingMode
+
 
 class IncidentCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
@@ -9,6 +11,9 @@ class IncidentCreate(BaseModel):
     source_device: str = Field(min_length=1)
     destination_device: str = Field(min_length=1)
     scenario: str = "interface-disabled"
+    operating_mode: OperatingMode = OperatingMode.LAB
+    data_source_ids: list[str] | None = None
+    resource_ids: list[str] | None = None
 
 
 class RemediationApproval(BaseModel):

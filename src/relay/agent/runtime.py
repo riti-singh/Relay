@@ -23,6 +23,7 @@ from relay.domain.models import (
     InvestigationContext,
     InvestigationEvent,
     InvestigationRun,
+    ObservationProvenance,
     ProposedRemediation,
     ToolCall,
 )
@@ -85,6 +86,8 @@ class AgentRuntime:
             incident.investigation_runs.append(run)
             self._event(incident, run.id, "RUN_QUEUED", "Investigation queued")
         run.plan = plan
+        run.operating_mode = incident.operating_mode
+        run.data_sources = list(incident.data_source_ids)
         run.status = AgentRunStatus.RUNNING
         run.started_at = datetime.now(UTC)
         self._event(incident, run.id, "RUN_STARTED", "Investigation started")
@@ -238,6 +241,7 @@ class AgentRuntime:
             remaining_step_budget=remaining,
             running_summary=incident.investigation_summary,
             available_tools=self.registry.schemas(),
+            operating_mode=incident.operating_mode,
         )
 
     def _execute(
@@ -278,11 +282,18 @@ class AgentRuntime:
         call.error_category = result.error_category
         call.error = result.error
         if result.success:
+            provenance = result.provenance or ObservationProvenance(
+                source_type=self.registry.adapter.source_type,
+                adapter=self.registry.adapter.adapter_id,
+            )
             incident.evidence.append(
                 Evidence(
                     tool_call_id=call.id,
                     summary=summary,
                     observation=result.output,
+                    status=result.status,
+                    provenance=provenance,
+                    run_id=run_id,
                     is_verification=verification,
                 )
             )
@@ -300,7 +311,13 @@ class AgentRuntime:
                 run_id,
                 "EVIDENCE_ADDED",
                 summary,
-                {"evidence_id": str(incident.evidence[-1].id), "tool_call_id": str(call.id)},
+                {
+                    "evidence_id": str(incident.evidence[-1].id),
+                    "tool_call_id": str(call.id),
+                    "status": result.status.value,
+                    "mode": incident.operating_mode.value,
+                    "provenance": provenance.model_dump(mode="json"),
+                },
             )
         else:
             run = next(r for r in incident.investigation_runs if r.id == run_id)
@@ -364,7 +381,7 @@ class AgentRuntime:
         payload: dict[str, object] | None = None,
     ) -> None:
         sequence = max((event.sequence for event in incident.events), default=0) + 1
-        body = {"summary": summary, **(payload or {})}
+        body = {"summary": summary, "mode": incident.operating_mode.value, **(payload or {})}
         incident.events.append(
             InvestigationEvent(
                 sequence=sequence,

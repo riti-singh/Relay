@@ -46,6 +46,40 @@ class ToolRisk(StrEnum):
     HIGH_RISK_WRITE = "HIGH_RISK_WRITE"
 
 
+class OperatingMode(StrEnum):
+    LAB = "LAB"
+    OBSERVE = "OBSERVE"
+
+
+class ObservationStatus(StrEnum):
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    UNSUPPORTED = "UNSUPPORTED"
+    UNAVAILABLE = "UNAVAILABLE"
+    STALE = "STALE"
+
+
+class Freshness(StrEnum):
+    FRESH = "FRESH"
+    STALE = "STALE"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class AdapterCapability(StrEnum):
+    TOPOLOGY = "TOPOLOGY"
+    INTERFACE_STATE = "INTERFACE_STATE"
+    ROUTES = "ROUTES"
+    REACHABILITY = "REACHABILITY"
+    DNS = "DNS"
+    SERVICE_CONNECTIVITY = "SERVICE_CONNECTIVITY"
+    POLICY = "POLICY"
+    LINK_METRICS = "LINK_METRICS"
+    PACKET_LOSS = "PACKET_LOSS"
+    CONFIGURATION = "CONFIGURATION"
+    RECENT_CHANGES = "RECENT_CHANGES"
+    INVENTORY = "INVENTORY"
+
+
 class ToolErrorCategory(StrEnum):
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     DEVICE_NOT_FOUND = "DEVICE_NOT_FOUND"
@@ -104,6 +138,87 @@ class NetworkTopology(BaseModel):
     links: list[NetworkLink]
 
 
+class ResourceStatus(StrEnum):
+    UP = "UP"
+    DOWN = "DOWN"
+    DEGRADED = "DEGRADED"
+    UNKNOWN = "UNKNOWN"
+
+
+class InventoryInterface(BaseModel):
+    id: str
+    device_id: str
+    name: str
+    status: ResourceStatus = ResourceStatus.UNKNOWN
+    management_address: str | None = None
+    labels: dict[str, str] = Field(default_factory=dict)
+    telemetry_source: str
+    last_observed_at: datetime | None = None
+
+
+class Device(BaseModel):
+    id: str
+    hostname: str
+    display_name: str
+    type: str
+    management_address: str | None = None
+    vendor: str | None = None
+    platform: str | None = None
+    site: str | None = None
+    labels: dict[str, str] = Field(default_factory=dict)
+    telemetry_source: str
+    status: ResourceStatus = ResourceStatus.UNKNOWN
+    last_observed_at: datetime | None = None
+
+
+class ServiceResource(BaseModel):
+    id: str
+    display_name: str
+    endpoint: str | None = None
+    labels: dict[str, str] = Field(default_factory=dict)
+    telemetry_source: str
+    status: ResourceStatus = ResourceStatus.UNKNOWN
+    last_observed_at: datetime | None = None
+
+
+class InventoryLink(BaseModel):
+    id: str
+    device_a: str
+    device_b: str
+    interface_a: str | None = None
+    interface_b: str | None = None
+    labels: dict[str, str] = Field(default_factory=dict)
+    telemetry_source: str
+    status: ResourceStatus = ResourceStatus.UNKNOWN
+    last_observed_at: datetime | None = None
+
+
+class Inventory(BaseModel):
+    devices: list[Device] = Field(default_factory=list)
+    interfaces: list[InventoryInterface] = Field(default_factory=list)
+    services: list[ServiceResource] = Field(default_factory=list)
+    links: list[InventoryLink] = Field(default_factory=list)
+
+
+class ObservationProvenance(BaseModel):
+    source_type: str
+    adapter: str
+    resource_id: str | None = None
+    observed_at: datetime | None = None
+    collected_at: datetime = Field(default_factory=utc_now)
+    freshness: Freshness = Freshness.FRESH
+    query_identity: str | None = None
+    measurement: str | None = None
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdapterObservation(BaseModel):
+    status: ObservationStatus
+    data: dict[str, Any] = Field(default_factory=dict)
+    provenance: ObservationProvenance
+    message: str | None = None
+
+
 class ToolCall(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     tool_name: str
@@ -122,6 +237,8 @@ class ToolCall(BaseModel):
 class ToolResult(BaseModel):
     success: bool
     output: dict[str, Any] = Field(default_factory=dict)
+    status: ObservationStatus = ObservationStatus.SUCCESS
+    provenance: ObservationProvenance | None = None
     error_category: ToolErrorCategory | None = None
     error: str | None = None
     retry_count: int = 0
@@ -133,6 +250,11 @@ class Evidence(BaseModel):
     tool_call_id: UUID
     summary: str
     observation: dict[str, Any]
+    status: ObservationStatus = ObservationStatus.SUCCESS
+    provenance: ObservationProvenance = Field(
+        default_factory=lambda: ObservationProvenance(source_type="simulator", adapter="lab")
+    )
+    run_id: UUID | None = None
     is_verification: bool = False
     recorded_at: datetime = Field(default_factory=utc_now)
 
@@ -230,6 +352,8 @@ class InvestigationRun(BaseModel):
     plan: list[str] = Field(default_factory=list)
     outcome: str | None = None
     steps_used: int = 0
+    operating_mode: OperatingMode = OperatingMode.LAB
+    data_sources: list[str] = Field(default_factory=lambda: ["lab-simulator"])
 
 
 class InvestigationContext(BaseModel):
@@ -248,6 +372,7 @@ class InvestigationContext(BaseModel):
     remaining_step_budget: int
     running_summary: str
     available_tools: dict[str, dict[str, Any]]
+    operating_mode: OperatingMode = OperatingMode.LAB
 
 
 class InvestigationEvent(BaseModel):
@@ -285,6 +410,9 @@ class Incident(BaseModel):
     source_device: str
     destination_device: str
     scenario: str = "interface-disabled"
+    operating_mode: OperatingMode = OperatingMode.LAB
+    data_source_ids: list[str] = Field(default_factory=lambda: ["lab-simulator"])
+    resource_ids: list[str] = Field(default_factory=list)
     status: IncidentStatus = IncidentStatus.OPEN
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

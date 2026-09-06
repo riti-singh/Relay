@@ -2,7 +2,9 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from relay.domain.models import ToolRisk
+from relay.adapters.base import DiagnosticOperation, NetworkAdapter
+from relay.adapters.simulator import SimulatorNetworkAdapter
+from relay.domain.models import AdapterObservation, ToolRisk
 from relay.network.simulator import NetworkSimulator
 from relay.tools.registry import Tool
 
@@ -67,9 +69,8 @@ class PingTool(Tool[ConnectivityInput]):
     input_model = ConnectivityInput
     retryable = True
 
-    def run(self, inputs: ConnectivityInput) -> dict[str, Any]:
-        path = self.simulator.path(inputs.source, inputs.destination)
-        return {"reachable": path is not None, "latency_ms": path[1] if path else None}
+    def run(self, inputs: ConnectivityInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.PING, inputs.model_dump())
 
 
 class TracerouteTool(Tool[ConnectivityInput]):
@@ -77,50 +78,48 @@ class TracerouteTool(Tool[ConnectivityInput]):
     input_model = ConnectivityInput
     retryable = True
 
-    def run(self, inputs: ConnectivityInput) -> dict[str, Any]:
-        return self.simulator.trace(inputs.source, inputs.destination)
+    def run(self, inputs: ConnectivityInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.TRACEROUTE, inputs.model_dump())
 
 
 class TopologyTool(Tool[EmptyInput]):
     name = "get_network_topology"
     input_model = EmptyInput
 
-    def run(self, inputs: EmptyInput) -> dict[str, Any]:
-        return self.simulator.topology().model_dump(mode="json")
+    def run(self, inputs: EmptyInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.TOPOLOGY, {})
 
 
 class InterfaceStatusTool(Tool[InterfaceInput]):
     name = "get_interface_status"
     input_model = InterfaceInput
 
-    def run(self, inputs: InterfaceInput) -> dict[str, Any]:
-        return self.simulator.interface(inputs.device_id, inputs.interface_name).model_dump(
-            mode="json"
-        )
+    def run(self, inputs: InterfaceInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.INTERFACE_STATUS, inputs.model_dump())
 
 
 class RouteTableTool(Tool[DeviceInput]):
     name = "get_route_table"
     input_model = DeviceInput
 
-    def run(self, inputs: DeviceInput) -> dict[str, Any]:
-        return {"routes": self.simulator.device(inputs.device_id).routes}
+    def run(self, inputs: DeviceInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.ROUTE_TABLE, inputs.model_dump())
 
 
 class DeviceLogsTool(Tool[DeviceInput]):
     name = "get_device_logs"
     input_model = DeviceInput
 
-    def run(self, inputs: DeviceInput) -> dict[str, Any]:
-        return {"logs": self.simulator.device(inputs.device_id).logs}
+    def run(self, inputs: DeviceInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.DEVICE_LOGS, inputs.model_dump())
 
 
 class DeviceConfigTool(Tool[DeviceInput]):
     name = "get_device_config"
     input_model = DeviceInput
 
-    def run(self, inputs: DeviceInput) -> dict[str, Any]:
-        return {"config": self.simulator.device(inputs.device_id).config}
+    def run(self, inputs: DeviceInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.DEVICE_CONFIG, inputs.model_dump())
 
 
 class ResolveDNSTool(Tool[DNSInput]):
@@ -128,12 +127,8 @@ class ResolveDNSTool(Tool[DNSInput]):
     input_model = DNSInput
     retryable = True
 
-    def run(self, inputs: DNSInput) -> dict[str, Any]:
-        return {
-            "hostname": inputs.hostname,
-            "target": self.simulator.dns_records.get(inputs.hostname),
-            "resolved": inputs.hostname in self.simulator.dns_records,
-        }
+    def run(self, inputs: DNSInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.RESOLVE_DNS, inputs.model_dump())
 
 
 class TestTCPTool(Tool[TCPInput]):
@@ -141,24 +136,24 @@ class TestTCPTool(Tool[TCPInput]):
     input_model = TCPInput
     retryable = True
 
-    def run(self, inputs: TCPInput) -> dict[str, Any]:
-        return self.simulator.tcp_test(inputs.source, inputs.destination, inputs.port)
+    def run(self, inputs: TCPInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.TEST_TCP, inputs.model_dump())
 
 
 class ACLRulesTool(Tool[DeviceInput]):
     name = "get_acl_rules"
     input_model = DeviceInput
 
-    def run(self, inputs: DeviceInput) -> dict[str, Any]:
-        return {"rules": self.simulator.device(inputs.device_id).acl_rules}
+    def run(self, inputs: DeviceInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.ACL_RULES, inputs.model_dump())
 
 
 class LinkMetricsTool(Tool[LinkInput]):
     name = "get_link_metrics"
     input_model = LinkInput
 
-    def run(self, inputs: LinkInput) -> dict[str, Any]:
-        return self.simulator._find_link(inputs.device_a, inputs.device_b).model_dump(mode="json")
+    def run(self, inputs: LinkInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.LINK_METRICS, inputs.model_dump())
 
 
 class PacketLossTool(Tool[ConnectivityInput]):
@@ -166,34 +161,24 @@ class PacketLossTool(Tool[ConnectivityInput]):
     input_model = ConnectivityInput
     retryable = True
 
-    def run(self, inputs: ConnectivityInput) -> dict[str, Any]:
-        return {
-            "packet_loss_percent": self.simulator.packet_loss(inputs.source, inputs.destination)
-        }
+    def run(self, inputs: ConnectivityInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.PACKET_LOSS, inputs.model_dump())
 
 
 class CompareConfigTool(Tool[DeviceInput]):
     name = "compare_config_to_baseline"
     input_model = DeviceInput
 
-    def run(self, inputs: DeviceInput) -> dict[str, Any]:
-        device = self.simulator.device(inputs.device_id)
-        return {
-            "matches": device.config == device.baseline_config,
-            "current": device.config,
-            "baseline": device.baseline_config,
-        }
+    def run(self, inputs: DeviceInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.COMPARE_CONFIG, inputs.model_dump())
 
 
 class RecentChangesTool(Tool[DeviceInput]):
     name = "get_recent_config_changes"
     input_model = DeviceInput
 
-    def run(self, inputs: DeviceInput) -> dict[str, Any]:
-        self.simulator.device(inputs.device_id)
-        return {
-            "changes": [c for c in self.simulator.recent_changes if c["device"] == inputs.device_id]
-        }
+    def run(self, inputs: DeviceInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.RECENT_CHANGES, inputs.model_dump())
 
 
 class WriteTool[T: BaseModel](Tool[T]):
@@ -250,31 +235,38 @@ class RestoreConfigBaselineTool(WriteTool[DeviceInput]):
         return self.simulator.restore_baseline(inputs.device_id)
 
 
-def build_registry(simulator: NetworkSimulator, max_retries: int = 1) -> "ToolRegistry":
+def build_registry(
+    source: NetworkSimulator | NetworkAdapter, max_retries: int = 1, include_writes: bool = True
+) -> "ToolRegistry":
     from relay.tools.registry import ToolRegistry
 
-    return ToolRegistry(
+    adapter = SimulatorNetworkAdapter(source) if isinstance(source, NetworkSimulator) else source
+    reads: list[Tool[Any]] = [
+        PingTool(adapter),
+        TracerouteTool(adapter),
+        TopologyTool(adapter),
+        InterfaceStatusTool(adapter),
+        RouteTableTool(adapter),
+        DeviceLogsTool(adapter),
+        DeviceConfigTool(adapter),
+        ResolveDNSTool(adapter),
+        TestTCPTool(adapter),
+        ACLRulesTool(adapter),
+        LinkMetricsTool(adapter),
+        PacketLossTool(adapter),
+        CompareConfigTool(adapter),
+        RecentChangesTool(adapter),
+    ]
+    writes: list[Tool[Any]] = (
         [
-            PingTool(simulator),
-            TracerouteTool(simulator),
-            TopologyTool(simulator),
-            InterfaceStatusTool(simulator),
-            RouteTableTool(simulator),
-            DeviceLogsTool(simulator),
-            DeviceConfigTool(simulator),
-            ResolveDNSTool(simulator),
-            TestTCPTool(simulator),
-            ACLRulesTool(simulator),
-            LinkMetricsTool(simulator),
-            PacketLossTool(simulator),
-            CompareConfigTool(simulator),
-            RecentChangesTool(simulator),
-            SetInterfaceAdminStateTool(simulator),
-            SetStaticRouteTool(simulator),
-            SetACLRuleEnabledTool(simulator),
-            SetDNSRecordTool(simulator),
-            RepairLinkTool(simulator),
-            RestoreConfigBaselineTool(simulator),
-        ],
-        max_retries=max_retries,
+            SetInterfaceAdminStateTool(adapter),
+            SetStaticRouteTool(adapter),
+            SetACLRuleEnabledTool(adapter),
+            SetDNSRecordTool(adapter),
+            RepairLinkTool(adapter),
+            RestoreConfigBaselineTool(adapter),
+        ]
+        if include_writes
+        else []
     )
+    return ToolRegistry([*reads, *writes], max_retries=max_retries, read_only=not include_writes)

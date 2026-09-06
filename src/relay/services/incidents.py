@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import builtins
+from collections.abc import Callable
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any, cast
 from uuid import UUID
 
+from relay.adapters.base import NetworkAdapter
 from relay.agent.planner import AgentModel, DeterministicPlanner, InvestigationPlanner
 from relay.agent.runtime import AgentRuntime, action_fingerprint
 from relay.domain.models import (
@@ -16,9 +19,12 @@ from relay.domain.models import (
     HypothesisStatus,
     Incident,
     IncidentStatus,
+    Inventory,
     InvestigationEvent,
     InvestigationRun,
     NetworkTopology,
+    ObservationProvenance,
+    OperatingMode,
     ProposedRemediation,
     ToolCall,
     VerificationResult,
@@ -38,6 +44,7 @@ class IncidentService:
         registry: ToolRegistry,
         planner: InvestigationPlanner,
         runtime: AgentRuntime | None = None,
+        adapter_factories: dict[str, Callable[[Incident], NetworkAdapter]] | None = None,
     ) -> None:
         self.repository, self.registry, self.planner = repository, registry, planner
         model = (
@@ -46,6 +53,7 @@ class IncidentService:
             else DeterministicPlanner()
         )
         self.runtime = runtime or AgentRuntime(registry, model)
+        self.adapter_factories = adapter_factories or {}
         self._incident_runtimes: dict[UUID, tuple[ToolRegistry, AgentRuntime]] = {}
         self._base_claimed = False
         self._cancelled_runs: set[UUID] = set()
@@ -58,6 +66,9 @@ class IncidentService:
         source_device: str,
         destination_device: str,
         scenario: str = "interface-disabled",
+        operating_mode: OperatingMode = OperatingMode.LAB,
+        data_source_ids: list[str] | None = None,
+        resource_ids: list[str] | None = None,
     ) -> Incident:
         incident = Incident(
             title=title,
@@ -65,11 +76,15 @@ class IncidentService:
             source_device=source_device,
             destination_device=destination_device,
             scenario=scenario,
+            operating_mode=operating_mode,
+            data_source_ids=data_source_ids
+            or (["lab-simulator"] if operating_mode is OperatingMode.LAB else ["fixture-http"]),
+            resource_ids=resource_ids or [source_device, destination_device],
         )
         registry, runtime = self._new_incident_runtime(incident)
         self._incident_runtimes[incident.id] = (registry, runtime)
-        topology = registry.execute("get_network_topology", {})
-        device_ids = {device["id"] for device in topology.output["devices"]}
+        topology = registry.adapter.topology()
+        device_ids = {device.id for device in topology.devices}
         unknown = {source_device, destination_device} - device_ids
         if unknown:
             raise ValueError(f"unknown incident device(s): {', '.join(sorted(unknown))}")
@@ -92,7 +107,79 @@ class IncidentService:
     def topology_for_incident(self, incident_id: UUID) -> NetworkTopology:
         incident = self.get(incident_id)
         registry, _ = self._runtime_for(incident)
-        return registry.simulator.topology()
+        return registry.adapter.topology()
+
+    def inventory(self, source_id: str | None = None) -> Inventory:
+        if source_id in {None, "lab-simulator"}:
+            return self.registry.adapter.inventory()
+        assert source_id is not None
+        factory = self.adapter_factories.get(source_id)
+        if factory is None:
+            raise ValueError(f"unknown data source: {source_id}")
+        placeholder = Incident(
+            title="inventory",
+            description="inventory",
+            source_device="",
+            destination_device="",
+            operating_mode=OperatingMode.OBSERVE,
+            data_source_ids=[source_id],
+            scenario="healthy",
+        )
+        return factory(placeholder).inventory()
+
+    def integrations(self) -> builtins.list[dict[str, Any]]:
+        rows = [
+            {
+                "id": "lab-simulator",
+                "name": self.registry.adapter.display_name,
+                "type": self.registry.adapter.source_type,
+                "status": "CONNECTED",
+                "capabilities": sorted(x.value for x in self.registry.adapter.capabilities),
+                "read_only": False,
+                "last_successful_observation": None,
+            }
+        ]
+        for source_id, factory in self.adapter_factories.items():
+            placeholder = Incident(
+                title="integration",
+                description="integration",
+                source_device="",
+                destination_device="",
+                operating_mode=OperatingMode.OBSERVE,
+                data_source_ids=[source_id],
+                scenario="healthy",
+            )
+            adapter = factory(placeholder)
+            connection_status = "CONNECTED"
+            last_observed = None
+            try:
+                inventory = adapter.inventory()
+                timestamps = [
+                    item.last_observed_at
+                    for group in (
+                        inventory.devices,
+                        inventory.interfaces,
+                        inventory.services,
+                        inventory.links,
+                    )
+                    for item in group
+                    if item.last_observed_at is not None
+                ]
+                last_observed = max(timestamps, default=None)
+            except RuntimeError:
+                connection_status = "UNAVAILABLE"
+            rows.append(
+                {
+                    "id": source_id,
+                    "name": adapter.display_name,
+                    "type": adapter.source_type,
+                    "status": connection_status,
+                    "capabilities": sorted(x.value for x in adapter.capabilities),
+                    "read_only": adapter.read_only,
+                    "last_successful_observation": last_observed,
+                }
+            )
+        return rows
 
     def reject_remediation(self, incident_id: UUID, rejected_by: str, reason: str) -> Incident:
         incident = self.get(incident_id)
@@ -134,6 +221,8 @@ class IncidentService:
             provider=provider,
             model=provider,
             max_steps=self.runtime.max_steps,
+            operating_mode=incident.operating_mode,
+            data_sources=incident.data_source_ids,
         )
         incident.investigation_runs.append(run)
         _, runtime = self._runtime_for(incident)
@@ -275,6 +364,9 @@ class IncidentService:
         self, incident_id: UUID, remediation_id: UUID, approved_by: str
     ) -> Incident:
         incident = self.get(incident_id)
+        if incident.operating_mode is OperatingMode.OBSERVE:
+            self._record_observe_write_rejection(incident, "approval endpoint rejected")
+            raise ValueError("OBSERVE mode is read-only; remediation approval is unavailable")
         self.registry, self.runtime = self._runtime_for(incident)
         remediation = incident.proposed_remediation
         if (
@@ -298,7 +390,17 @@ class IncidentService:
         return incident
 
     def _new_incident_runtime(self, incident: Incident) -> tuple[ToolRegistry, AgentRuntime]:
-        if not self._base_claimed and self.registry.simulator.scenario == incident.scenario:
+        if incident.operating_mode is OperatingMode.OBSERVE:
+            from relay.tools.network_tools import build_registry
+
+            source_id = incident.data_source_ids[0]
+            factory = self.adapter_factories.get(source_id)
+            if factory is None:
+                raise ValueError(f"unknown OBSERVE data source: {source_id}")
+            registry = build_registry(
+                factory(incident), self.registry.max_retries, include_writes=False
+            )
+        elif not self._base_claimed and self.registry.simulator.scenario == incident.scenario:
             self._base_claimed = True
             registry = self.registry
         else:
@@ -339,6 +441,9 @@ class IncidentService:
         return self.approve_remediation(incident_id, incident.proposed_remediation.id, "legacy-api")
 
     def _execute_remediation(self, incident: Incident, approval: ApprovalRecord) -> None:
+        if incident.operating_mode is OperatingMode.OBSERVE:
+            self._record_observe_write_rejection(incident, "remediation execution rejected")
+            raise ValueError("OBSERVE mode is read-only; remediation execution is forbidden")
         remediation = incident.proposed_remediation
         if (
             remediation is None
@@ -497,12 +602,46 @@ class IncidentService:
         call.error_category = result.error_category
         call.error = result.error
         if result.success:
+            provenance = result.provenance or ObservationProvenance(
+                source_type=self.registry.adapter.source_type,
+                adapter=self.registry.adapter.adapter_id,
+            )
             incident.evidence.append(
                 Evidence(
                     tool_call_id=call.id,
                     summary=summary,
                     observation=result.output,
+                    status=result.status,
+                    provenance=provenance,
+                    run_id=incident.investigation_runs[-1].id
+                    if incident.investigation_runs
+                    else None,
                     is_verification=verification,
                 )
             )
         return result.success, call.id
+
+    def _record_observe_write_rejection(self, incident: Incident, reason: str) -> None:
+        run_id = (
+            incident.investigation_runs[-1].id
+            if incident.investigation_runs
+            else InvestigationRun(
+                incident_id=incident.id,
+                operating_mode=incident.operating_mode,
+                data_sources=incident.data_source_ids,
+            ).id
+        )
+        incident.events.append(
+            InvestigationEvent(
+                sequence=max((event.sequence for event in incident.events), default=0) + 1,
+                incident_id=incident.id,
+                run_id=run_id,
+                type="OBSERVE_WRITE_REJECTED",
+                payload={
+                    "summary": reason,
+                    "mode": incident.operating_mode.value,
+                    "read_only": True,
+                },
+            )
+        )
+        self.repository.save(incident)

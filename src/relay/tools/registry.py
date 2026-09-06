@@ -6,7 +6,15 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from relay.domain.models import ApprovalState, ToolErrorCategory, ToolResult, ToolRisk
+from relay.adapters.base import NetworkAdapter
+from relay.domain.models import (
+    AdapterObservation,
+    ApprovalState,
+    ObservationStatus,
+    ToolErrorCategory,
+    ToolResult,
+    ToolRisk,
+)
 from relay.network.simulator import NetworkError, NetworkSimulator
 
 
@@ -24,19 +32,29 @@ class Tool[InputT: BaseModel](ABC):
     risk = ToolRisk.READ_ONLY
     retryable = False
 
-    def __init__(self, simulator: NetworkSimulator) -> None:
-        self.simulator = simulator
+    def __init__(self, adapter: NetworkAdapter) -> None:
+        self.adapter = adapter
+
+    @property
+    def simulator(self) -> NetworkSimulator:
+        candidate = getattr(self.adapter, "simulator", None)
+        if not isinstance(candidate, NetworkSimulator):
+            raise ToolError("this tool is not backed by the LAB simulator")
+        return candidate
 
     @abstractmethod
-    def run(self, inputs: InputT) -> dict[str, Any]: ...
+    def run(self, inputs: InputT) -> dict[str, Any] | AdapterObservation: ...
 
 
 class ToolRegistry:
-    def __init__(self, tools: list[Tool[Any]], max_retries: int = 1) -> None:
+    def __init__(
+        self, tools: list[Tool[Any]], max_retries: int = 1, read_only: bool | None = None
+    ) -> None:
         if not tools:
             raise ValueError("at least one tool is required")
         self._tools = {tool.name: tool for tool in tools}
-        self.simulator = tools[0].simulator
+        self.adapter = tools[0].adapter
+        self.read_only = self.adapter.read_only if read_only is None else read_only
         self.max_retries = max_retries
 
     def is_state_changing(self, name: str) -> bool:
@@ -46,7 +64,14 @@ class ToolRegistry:
         return self._get(name).risk
 
     def schemas(self) -> dict[str, dict[str, Any]]:
-        return {name: tool.input_model.model_json_schema() for name, tool in self._tools.items()}
+        return {
+            name: {
+                **tool.input_model.model_json_schema(),
+                "x-relay-risk": tool.risk.value,
+                "x-relay-read-only-source": self.read_only,
+            }
+            for name, tool in self._tools.items()
+        }
 
     def execute(
         self,
@@ -56,6 +81,12 @@ class ToolRegistry:
     ) -> ToolResult:
         started = perf_counter()
         tool = self._get(name)
+        if self.read_only and tool.risk is not ToolRisk.READ_ONLY:
+            return self._failure(
+                started,
+                ToolErrorCategory.PERMISSION_DENIED,
+                "write tools are structurally disabled for OBSERVE mode",
+            )
         is_approved = approved is True or approved is ApprovalState.APPROVED
         if tool.risk is not ToolRisk.READ_ONLY and not is_approved:
             raise ApprovalRequiredError(
@@ -68,9 +99,33 @@ class ToolRegistry:
         retries = 0
         while True:
             try:
-                if tool.simulator.consume_failure(name):
+                simulator = getattr(tool.adapter, "simulator", None)
+                if simulator is not None and simulator.consume_failure(name):
                     raise TimeoutError(f"injected timeout for {name}")
                 output = tool.run(inputs)
+                if isinstance(output, AdapterObservation):
+                    success = output.status in {
+                        ObservationStatus.SUCCESS,
+                        ObservationStatus.STALE,
+                        ObservationStatus.UNSUPPORTED,
+                        ObservationStatus.UNAVAILABLE,
+                    }
+                    return ToolResult(
+                        success=success,
+                        output=output.data,
+                        status=output.status,
+                        provenance=output.provenance,
+                        error=output.message,
+                        error_category=ToolErrorCategory.UNSUPPORTED_OPERATION
+                        if output.status is ObservationStatus.UNSUPPORTED
+                        else (
+                            ToolErrorCategory.TOOL_TIMEOUT
+                            if output.status is ObservationStatus.UNAVAILABLE
+                            else None
+                        ),
+                        retry_count=retries,
+                        duration_ms=(perf_counter() - started) * 1000,
+                    )
                 return ToolResult(
                     success=True,
                     output=output,
@@ -111,3 +166,10 @@ class ToolRegistry:
             return self._tools[name]
         except KeyError as exc:
             raise ToolError(f"unknown tool: {name}") from exc
+
+    @property
+    def simulator(self) -> NetworkSimulator:
+        candidate = getattr(self.adapter, "simulator", None)
+        if not isinstance(candidate, NetworkSimulator):
+            raise ToolError("registry is not backed by a simulator")
+        return candidate

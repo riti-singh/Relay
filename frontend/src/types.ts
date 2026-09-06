@@ -57,6 +57,18 @@ export interface Evidence {
   observation: Record<string, unknown>;
   is_verification: boolean;
   recorded_at: string;
+  status?: "SUCCESS" | "FAILED" | "UNSUPPORTED" | "UNAVAILABLE" | "STALE";
+  provenance?: {
+    source_type: string;
+    adapter: string;
+    resource_id?: string;
+    observed_at?: string;
+    collected_at: string;
+    freshness: "FRESH" | "STALE" | "UNAVAILABLE";
+    query_identity?: string;
+    measurement?: string;
+  };
+  run_id?: string;
 }
 export interface Revision {
   confidence: number;
@@ -113,6 +125,8 @@ export interface Run {
   last_event_sequence: number;
   outcome?: string;
   steps_used: number;
+  operating_mode: "LAB" | "OBSERVE";
+  data_sources: string[];
 }
 export interface Remediation {
   id: string;
@@ -129,6 +143,9 @@ export interface Incident {
   source_device: string;
   destination_device: string;
   scenario: string;
+  operating_mode: "LAB" | "OBSERVE";
+  data_source_ids: string[];
+  resource_ids: string[];
   status: Status;
   created_at: string;
   updated_at: string;
@@ -165,6 +182,15 @@ export interface Scenario {
   description: string;
   source_device: string;
   destination_device: string;
+}
+export interface Integration {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  capabilities: string[];
+  read_only: boolean;
+  last_successful_observation?: string;
 }
 export interface Evaluation {
   summary: Record<string, number>;
