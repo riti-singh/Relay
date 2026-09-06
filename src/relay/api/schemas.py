@@ -2,7 +2,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from relay.domain.models import OperatingMode
+from relay.domain.models import CommentTarget, OperatingMode
 
 
 class IncidentCreate(BaseModel):
@@ -28,3 +28,11 @@ class RemediationRejection(BaseModel):
 
 class AgentRunRequest(BaseModel):
     planner: str = Field(default="deterministic", pattern="^(deterministic|ai)$")
+
+
+class CommentCreate(BaseModel):
+    author: str = Field(min_length=1, max_length=100)
+    body: str = Field(min_length=1, max_length=2000)
+    target_type: CommentTarget = CommentTarget.INVESTIGATION
+    target_id: UUID | None = None
+    request_agent_step: bool = False

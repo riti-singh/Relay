@@ -3,7 +3,6 @@ import {
   BarChart3,
   Bell,
   GitBranch,
-  LayoutDashboard,
   Home as HomeIcon,
   ListChecks,
   Network,
@@ -16,7 +15,6 @@ import {
   Home,
   IncidentPage,
   Incidents,
-  Overview,
   Runs,
   TopologyPage,
   Integrations,
@@ -39,49 +37,40 @@ export default function App() {
             <HomeIcon />
             Home
           </NavLink>
-          <NavLink to="/overview">
-            <LayoutDashboard />
-            Overview
-          </NavLink>
           <NavLink to="/incidents">
             <Bell />
-            Incidents
+            Investigations
           </NavLink>
           <NavLink to="/topology">
             <Network />
-            Topology
+            Network
           </NavLink>
           <NavLink to="/runs">
             <ListChecks />
-            Agent Runs
+            Runs
           </NavLink>
           <NavLink to="/integrations">
             <Radio />
-            Data Sources
+            Sources
           </NavLink>
           <NavLink to="/evaluations">
             <BarChart3 />
-            Evaluations
+            Evaluation
           </NavLink>
         </nav>
-        <div className="rail-foot">
-          <div className="live-dot" />
-          SIMULATOR ONLINE<small>Deterministic lab</small>
-        </div>
       </aside>
       <main>
         <header>
           <div className="crumb">
             <GitBranch />
-            RELAY / NOC CONSOLE
+            RELAY / INVESTIGATIONS
           </div>
           <div className="header-state">
-            <Activity /> AUTONOMY BOUNDED <ShieldCheck /> HUMAN-GATED WRITES
+            <Activity /> SOURCE-BACKED EVIDENCE <ShieldCheck /> HUMAN-GATED WRITES
           </div>
         </header>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/overview" element={<Overview />} />
           <Route path="/incidents" element={<Incidents />} />
           <Route path="/incidents/:id" element={<IncidentPage />} />
           <Route path="/topology" element={<TopologyPage />} />

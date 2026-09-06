@@ -166,6 +166,23 @@ export interface Incident {
     tool_call_ids: string[];
     recorded_at: string;
   };
+  comments: Array<{
+    id: string;
+    author: string;
+    body: string;
+    target_type: string;
+    target_id?: string;
+    request_agent_step: boolean;
+    created_at: string;
+  }>;
+  pending_operator_request?: string;
+  conclusion?: {
+    kind: "ROOT_CAUSE" | "ASSESSMENT";
+    summary: string;
+    confidence: number;
+    evidence_ids: string[];
+    recorded_at: string;
+  };
 }
 export interface RunEvent {
   event_id: string;
@@ -186,11 +203,13 @@ export interface Scenario {
 export interface Integration {
   id: string;
   name: string;
-  type: string;
+  adapter_type: string;
+  classification: "LAB" | "DEMO" | "LIVE";
   status: string;
   capabilities: string[];
   read_only: boolean;
-  last_successful_observation?: string;
+  last_successful_query?: string;
+  freshness_policy: { max_age_seconds: number; description: string };
 }
 export interface Evaluation {
   summary: Record<string, number>;

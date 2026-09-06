@@ -20,6 +20,7 @@ from relay.domain.models import (
     HypothesisStatus,
     Incident,
     IncidentStatus,
+    InvestigationConclusion,
     InvestigationContext,
     InvestigationEvent,
     InvestigationRun,
@@ -75,10 +76,10 @@ class AgentRuntime:
         elif incident.status is not IncidentStatus.INVESTIGATING:
             raise ValueError(f"cannot investigate incident in {incident.status}")
         plan = [
-            "Establish connectivity and path",
-            "Inspect routing, interfaces, service, DNS, policy, link health, and drift",
+            "Discover available diagnostic capabilities",
+            "Collect source-backed observations",
             "Maintain evidence-backed hypotheses",
-            "Propose an exact remediation and pause for approval",
+            "Conclude at the certainty supported by the selected source",
         ]
         incident.investigation_plan = plan
         if run is None:
@@ -191,6 +192,22 @@ class AgentRuntime:
                 return incident
             elif decision.kind is ActionKind.DECLARE_RESOLVED:
                 incident.transition_to(IncidentStatus.RESOLVED)
+                confirmed = [
+                    item
+                    for item in incident.hypotheses
+                    if item.status is HypothesisStatus.CONFIRMED
+                ]
+                if confirmed:
+                    finding = confirmed[-1]
+                    incident.conclusion = InvestigationConclusion(
+                        kind="ASSESSMENT"
+                        if incident.operating_mode.value == "OBSERVE"
+                        else "ROOT_CAUSE",
+                        summary=finding.statement,
+                        confidence=finding.confidence,
+                        evidence_ids=finding.supporting_evidence_ids,
+                    )
+                incident.pending_operator_request = None
                 run.outcome = decision.summary
                 run.completed_at = datetime.now(UTC)
                 run.status = AgentRunStatus.COMPLETED
@@ -225,7 +242,7 @@ class AgentRuntime:
             source_device=incident.source_device,
             destination_device=incident.destination_device,
             topology_summary=(
-                "5-device simulated WAN; details available through get_network_topology"
+                "Topology and paths are available only through registered source capabilities"
             ),
             current_plan=incident.investigation_plan,
             recent_tool_calls=recent_calls,
@@ -242,6 +259,7 @@ class AgentRuntime:
             running_summary=incident.investigation_summary,
             available_tools=self.registry.schemas(),
             operating_mode=incident.operating_mode,
+            operator_request=incident.pending_operator_request,
         )
 
     def _execute(

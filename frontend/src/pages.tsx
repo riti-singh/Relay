@@ -6,7 +6,6 @@ import {
   Check,
   Info,
   Play,
-  Plus,
   Radio,
   ShieldAlert,
   X,
@@ -20,7 +19,6 @@ import {
   NetworkMap,
   pct,
   Status,
-  ToolRow,
   Verification,
 } from "./components";
 import { useLoad } from "./hooks";
@@ -64,103 +62,7 @@ export function Home() {
         <section><h2>Recovery must be proven</h2><p>Remediation is not success by itself. Relay runs scenario-relevant connectivity checks and resolves the incident only when verification passes.</p></section>
         <section><h2>Built for evidence, not opaque answers</h2><p>Tool calls, observations, hypotheses, run events, approvals, and verification remain visible and replayable. Hidden model reasoning is never stored.</p></section>
       </div>
-      <section className="product-areas panel"><h2>Explore Relay</h2><div><a href="/overview"><b>Operations summary</b><span>System-wide operational health</span></a><a href="/incidents"><b>Incident workspace</b><span>Inject failures and investigate</span></a><a href="/topology"><b>Network map</b><span>See devices, links, and evidence</span></a><a href="/runs"><b>Run history</b><span>Replay durable executions</span></a><a href="/evaluations"><b>Quality evaluation</b><span>Measure accuracy and safety</span></a></div></section>
-    </Page>
-  );
-}
-export function Overview() {
-  const q = useLoad(() => api.dashboard(), []);
-  if (q.error)
-    return (
-      <Page>
-        <ErrorState message={q.error} retry={q.reload} />
-      </Page>
-    );
-  if (!q.data)
-    return (
-      <Page>
-        <div className="loading">Loading live operations data…</div>
-      </Page>
-    );
-  const d = q.data as Record<string, any>;
-  return (
-    <Page
-      eyebrow="LIVE OPERATIONS"
-      title="Network health at a glance"
-      description="A system-wide operational summary of active incidents, approvals, recovery, investigation efficiency, and deterministic quality metrics."
-      action={
-        <a className="primary" href="/incidents">
-          <Plus /> Inject Incident
-        </a>
-      }
-    >
-      <div className="metric-grid">
-        <Metric label="Open incidents" value={d.open_incidents} />
-        <Metric
-          label="Awaiting approval"
-          value={d.awaiting_approval}
-          alert={d.awaiting_approval > 0}
-        />
-        <Metric label="Resolved" value={d.resolved_incidents} />
-        <Metric
-          label="Mean investigation"
-          value={`${Number(d.mean_investigation_steps).toFixed(1)} steps`}
-        />
-        <Metric
-          label="Root-cause accuracy"
-          value={pct(d.root_cause_accuracy)}
-        />
-        <Metric
-          label="Resolution success"
-          value={pct(d.resolution_success_rate)}
-        />
-        <Metric label="Safety violations" value={d.safety_violations} />
-        <Metric
-          label="Tools / run"
-          value={Number(d.average_tool_calls).toFixed(1)}
-        />
-      </div>
-      <div className="overview-grid">
-        <section className="panel span2">
-          <PanelTitle title="Recent incidents" meta="SIMULATED ENVIRONMENT" />
-          {d.recent_incidents?.length ? (
-            <IncidentTable incidents={d.recent_incidents} />
-          ) : (
-            <Empty
-              title="No incident history"
-              detail="Inject a deterministic scenario to begin."
-            />
-          )}
-        </section>
-        <section className="panel health">
-          <PanelTitle title="Network health" meta="5 DEVICES · 4 LINKS" />
-          <div className="health-ring">
-            <span>98</span>
-            <small>HEALTH SCORE</small>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="good-dot" />
-              Control plane
-            </span>
-            <b>HEALTHY</b>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="good-dot" />
-              Simulator
-            </span>
-            <b>ONLINE</b>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="blue-dot" />
-              Planner
-            </span>
-            <b>READY</b>
-          </div>
-        </section>
-      </div>
+      <section className="product-areas panel"><h2>Explore Relay</h2><div><a href="/incidents"><b>Investigation workspace</b><span>Select a source and investigate</span></a><a href="/topology"><b>Network evidence</b><span>See simulated topology or observed paths</span></a><a href="/runs"><b>Run history</b><span>Replay durable executions</span></a><a href="/integrations"><b>Data sources</b><span>Inspect classifications and capabilities</span></a><a href="/evaluations"><b>Quality evaluation</b><span>Measure groundedness and safety</span></a></div></section>
     </Page>
   );
 }
@@ -266,40 +168,61 @@ export function Incidents() {
   const q = useLoad(() => api.incidents(), []);
   const scenarios = useLoad(() => api.scenarios(), []);
   const observe = useLoad(() => api.observeDatasets(), []);
-  const [mode, setMode] = useState<"LAB" | "OBSERVE">("LAB");
+  const [source, setSource] = useState<"LAB" | "RIPE_ATLAS" | "HTTP_FIXTURE">("LAB");
+  const [measurementId, setMeasurementId] = useState("");
+  const [sourceError, setSourceError] = useState("");
   const [creating, setCreating] = useState(false);
   const nav = useNavigate();
   async function inject(s: Scenario) {
     setCreating(true);
     try {
-      const i = await api.create(s, mode);
+      const i = await api.create(s, source === "LAB" ? "LAB" : "OBSERVE");
       nav(`/incidents/${i.id}`);
+    } finally {
+      setCreating(false);
+    }
+  }
+  async function createRipe() {
+    setCreating(true);
+    setSourceError("");
+    try {
+      const metadata = await api.ripeMeasurement(measurementId.trim());
+      const i = await api.createRipe(measurementId.trim(), metadata);
+      nav(`/incidents/${i.id}`);
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "RIPE Atlas query failed");
     } finally {
       setCreating(false);
     }
   }
   return (
     <Page
-      eyebrow="INCIDENT COMMAND"
-      title="Incidents"
-      description="Choose deterministic LAB telemetry or a read-only OBSERVE source. The same agent runtime and typed tools investigate both."
-      action={<span className="quiet">{mode === "LAB" ? "Deterministic scenario laboratory" : "External telemetry · read-only"}</span>}
+      eyebrow="NEW INVESTIGATION"
+      title="Investigations"
+      description="Choose a source. One agent runtime discovers and uses only that source's real diagnostic capabilities."
+      action={<span className="quiet">{source.replaceAll("_", " ")}</span>}
     >
       <section className="inject panel">
         <div>
-          <span className="kicker">CREATE / INJECT</span>
-          <h2>Choose a failure scenario</h2>
-          <div className="mode-picker" aria-label="Operating mode">
-            <button className={mode === "LAB" ? "active" : ""} onClick={() => setMode("LAB")}><b>LAB</b><span>Deterministic simulation. Guarded remediation is available.</span></button>
-            <button className={mode === "OBSERVE" ? "active" : ""} onClick={() => setMode("OBSERVE")}><b>OBSERVE</b><span>External telemetry only. Relay cannot modify the network.</span></button>
+          <span className="kicker">DATA SOURCE</span>
+          <h2>Select an investigation environment</h2>
+          <div className="mode-picker" aria-label="Data source">
+            <button className={source === "LAB" ? "active" : ""} onClick={() => setSource("LAB")}><b>Relay Lab</b><span>SIMULATION · deterministic scenarios with guarded remediation.</span></button>
+            <button className={source === "RIPE_ATLAS" ? "active" : ""} onClick={() => setSource("RIPE_ATLAS")}><b>RIPE Atlas</b><span>LIVE PUBLIC INTERNET · read-only ping and traceroute telemetry.</span></button>
+            <button className={source === "HTTP_FIXTURE" ? "active" : ""} onClick={() => setSource("HTTP_FIXTURE")}><b>Fixture HTTP</b><span>DEMO · structured recorded telemetry.</span></button>
           </div>
-          <p>
-            The root cause remains hidden. Relay receives only the incident
-            symptoms.
-          </p>
+          <p>Capabilities, resource selection, provenance, and available tools follow this source.</p>
         </div>
-        <div className="scenario-grid">
-          {(mode === "LAB" ? scenarios.data : observe.data)?.map((s) => (
+        {source === "RIPE_ATLAS" ? (
+          <div className="ripe-picker">
+            <label htmlFor="measurement-id">Public measurement ID</label>
+            <input id="measurement-id" value={measurementId} onChange={(event) => setMeasurementId(event.target.value)} placeholder="For example, a public ping or traceroute ID" />
+            <button className="primary" disabled={creating || !measurementId.trim()} onClick={createRipe}>Load live metadata and create</button>
+            {sourceError && <div className="action-error">{sourceError}</div>}
+            <small>Relay calls the official RIPE Atlas API. Provider failures are shown; fixture fallback is never used.</small>
+          </div>
+        ) : <div className="scenario-grid">
+          {(source === "LAB" ? scenarios.data : observe.data)?.map((s) => (
             <button key={s.id} disabled={creating} onClick={() => inject(s)}>
               <AlertTriangle />
               <b>{s.name}</b>
@@ -307,7 +230,7 @@ export function Incidents() {
               <small>INJECT INCIDENT →</small>
             </button>
           ))}
-        </div>
+        </div>}
       </section>
       <section className="panel">
         <PanelTitle
@@ -364,6 +287,7 @@ export function IncidentPage() {
   const [planner, setPlanner] = useState("deterministic");
   const [busy, setBusy] = useState(false);
   const [activeRun, setActiveRun] = useState<string>();
+  const [comment, setComment] = useState("");
   useEffect(() => {
     if (!activeRun) return;
     const stream = api.events(id, activeRun);
@@ -400,6 +324,16 @@ export function IncidentPage() {
     if (!incident?.proposed_remediation) return;
     q.setData(await api.reject(id, incident.proposed_remediation));
   }
+  async function submitComment(requestAgentStep: boolean) {
+    if (!comment.trim()) return;
+    setBusy(true);
+    try {
+      q.setData(await api.comment(id, comment.trim(), requestAgentStep));
+      setComment("");
+    } finally {
+      setBusy(false);
+    }
+  }
   if (q.error)
     return (
       <Page>
@@ -420,7 +354,6 @@ export function IncidentPage() {
           <div className="incident-tags">
             <Status value={incident.status} />
             <Status value={incident.operating_mode ?? "LAB"} />
-            <span>P2 · HIGH</span>
             <span>{scenarioName(incident.scenario)}</span>
           </div>
           <h1>{incident.title}</h1>
@@ -495,10 +428,11 @@ export function IncidentPage() {
         </div>
       )}
       <div className="progress-steps" aria-label="Investigation progress">
-        {["Incident context", "Investigation", "Evidence", "Root cause", "Approval", "Remediation", "Verification"].map((step, index) => (
+        {["Context", "Investigation", "Evidence", incident.operating_mode === "LAB" ? "Root cause" : "Assessment", "Action", "Verification"].map((step, index) => (
           <span className={progressIndex(incident.status) >= index ? "done" : ""} key={step}>{index + 1}<small>{step}</small></span>
         ))}
       </div>
+      {incident.conclusion && <section className="panel conclusion"><span className="kicker">{incident.conclusion.kind.replace("_", " ")}</span><h2>{incident.conclusion.summary}</h2><p>Confidence {Math.round(incident.conclusion.confidence * 100)}% · grounded in {incident.conclusion.evidence_ids.length} evidence items</p></section>}
       <div className="workspace">
         <section className="panel topology-work">
           <PanelTitle title="Incident path" meta="EVIDENCE-AWARE TOPOLOGY" />
@@ -519,10 +453,15 @@ export function IncidentPage() {
         </section>
         <section className="panel timeline">
           <PanelTitle
-            title="Investigation timeline"
-            meta={`${incident.actions.length} ACTIONS`}
+            title="Investigation activity"
+            meta={`${incident.events.length} PERSISTED EVENTS`}
           />
           <Timeline incident={incident} />
+          <div className="operator-input">
+            <label htmlFor="operator-comment">Operator comment or investigation request</label>
+            <textarea id="operator-comment" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Check whether the affected probes share an ASN." />
+            <div><button disabled={busy || !comment.trim()} onClick={() => submitComment(false)}>Add comment</button><button className="primary" disabled={busy || !comment.trim()} onClick={() => submitComment(true)}>Request another step</button></div>
+          </div>
         </section>
         <section className="panel evidence-panel">
           <PanelTitle
@@ -598,9 +537,7 @@ const component = (e: Evidence) =>
       "",
   );
 function Timeline({ incident }: { incident: Incident }) {
-  const calls = new Map(incident.tool_calls.map((c) => [c.id, c]));
-  const evidence = new Map(incident.evidence.map((e) => [e.tool_call_id, e]));
-  if (!incident.actions.length)
+  if (!incident.events.length)
     return (
       <Empty
         title="Investigation not started"
@@ -609,24 +546,17 @@ function Timeline({ incident }: { incident: Incident }) {
     );
   return (
     <div className="timeline-list">
-      {incident.actions.map((a) => (
-        <div className="timeline-item" key={a.id}>
-          <time>{fmtTime(a.created_at)}</time>
+      {incident.events.map((event) => (
+        <div className="timeline-item" key={event.event_id}>
+          <time>{fmtTime(event.timestamp)}</time>
           <div className="timeline-line">
             <i />
           </div>
           <div className="timeline-content">
             <span className="timeline-kind">
-              {a.decision.kind.replaceAll("_", " ")}
+              {event.type.replaceAll("_", " ")}
             </span>
-            <p>{a.decision.summary}</p>
-            {a.tool_call_id && calls.get(a.tool_call_id) && (
-              <ToolRow
-                call={calls.get(a.tool_call_id)!}
-                evidence={evidence.get(a.tool_call_id)}
-              />
-            )}{" "}
-            {a.error && <div className="action-error">{a.error}</div>}
+            <p>{String(event.payload.summary ?? event.type)}</p>
           </div>
         </div>
       ))}
@@ -755,10 +685,11 @@ export function Integrations() {
         {q.data?.map((source) => (
           <section className="panel integration-card" key={source.id}>
             <div><Radio /><h2>{source.name}</h2><Status value={source.status} /></div>
-            <p>{source.type} · <b>{source.read_only ? "READ ONLY" : "LAB WRITES HUMAN-GATED"}</b></p>
+            <p>{source.classification} · {source.adapter_type} · <b>{source.read_only ? "READ ONLY" : "LAB WRITES HUMAN-GATED"}</b></p>
             <small>Capabilities</small>
             <div className="capabilities-list">{source.capabilities.map((capability) => <span key={capability}>{capability.replaceAll("_", " ")}</span>)}</div>
-            <p>Last successful observation: {source.last_successful_observation ? fmtTime(source.last_successful_observation) : "Not yet queried"}</p>
+            <p>Freshness: {source.freshness_policy.description}</p>
+            <p>Last successful query: {source.last_successful_query ? fmtTime(source.last_successful_query) : "Not yet queried"}</p>
           </section>
         ))}
         {q.error && <ErrorState message={q.error} retry={q.reload} />}

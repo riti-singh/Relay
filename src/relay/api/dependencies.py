@@ -1,14 +1,26 @@
 from functools import lru_cache
 
 from relay.adapters.http_telemetry import HTTPTelemetryAdapter
+from relay.adapters.ripe_atlas import RIPEAtlasAdapter
 from relay.agent.planner import AgentModel, DeterministicPlanner, OpenAICompatibleAgentModel
 from relay.agent.runtime import AgentRuntime
-from relay.config import get_settings
-from relay.domain.models import AdapterCapability
+from relay.config import Settings, get_settings
+from relay.domain.models import AdapterCapability, Incident
 from relay.network.simulator import NetworkSimulator
 from relay.repositories.incidents import SQLiteIncidentRepository
 from relay.services.incidents import IncidentService
 from relay.tools.network_tools import build_registry
+
+
+def _ripe_adapter(settings: Settings, incident: Incident) -> RIPEAtlasAdapter:
+    adapter = RIPEAtlasAdapter(
+        settings.ripe_atlas_url,
+        settings.ripe_atlas_timeout_seconds,
+        settings.ripe_atlas_freshness_seconds,
+    )
+    if incident.source_device:
+        adapter.select_measurement(incident.source_device)
+    return adapter
 
 
 @lru_cache
@@ -42,6 +54,7 @@ def get_incident_service() -> IncidentService:
             AdapterCapability.TOPOLOGY,
             AdapterCapability.INVENTORY,
             AdapterCapability.REACHABILITY,
+            AdapterCapability.PATH_TRACE,
             AdapterCapability.INTERFACE_STATE,
             AdapterCapability.ROUTES,
             AdapterCapability.LINK_METRICS,
@@ -62,7 +75,8 @@ def get_incident_service() -> IncidentService:
                 external_capabilities,
                 settings.telemetry_timeout_seconds,
                 settings.telemetry_freshness_seconds,
-            )
+            ),
+            "ripe-atlas": lambda incident: _ripe_adapter(settings, incident),
         },
     )
     if settings.seed_demo_data and not service.list():

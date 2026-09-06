@@ -34,8 +34,8 @@ describe("Relay console", () => {
         <App />
       </MemoryRouter>,
     );
-    expect(screen.getByText("Overview")).toBeInTheDocument();
-    expect(screen.getByText("Agent Runs")).toBeInTheDocument();
+    expect(screen.getByText("Investigations")).toBeInTheDocument();
+    expect(screen.getByText("Runs")).toBeInTheDocument();
   });
   it("handles topology data", () => {
     render(<NetworkMap topology={topology} />);

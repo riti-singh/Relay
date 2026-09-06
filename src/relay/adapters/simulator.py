@@ -8,6 +8,7 @@ from relay.adapters.base import DiagnosticOperation, NetworkAdapter
 from relay.domain.models import (
     AdapterCapability,
     AdapterObservation,
+    DataSourceClassification,
     Device,
     Freshness,
     Inventory,
@@ -27,7 +28,13 @@ class SimulatorNetworkAdapter(NetworkAdapter):
     display_name = "Deterministic network simulator"
     source_type = "simulator"
     read_only = False
-    capabilities = frozenset(AdapterCapability)
+    classification = DataSourceClassification.LAB
+    freshness_seconds = 0
+    capabilities = frozenset(
+        capability
+        for capability in AdapterCapability
+        if capability is not AdapterCapability.PROBE_METADATA
+    )
 
     def __init__(self, simulator: NetworkSimulator) -> None:
         self.simulator = simulator
@@ -61,6 +68,11 @@ class SimulatorNetworkAdapter(NetworkAdapter):
             ).model_dump(mode="json"),
             DiagnosticOperation.PACKET_LOSS: lambda: {
                 "packet_loss_percent": self.simulator.packet_loss(**arguments)
+            },
+            DiagnosticOperation.LATENCY: lambda: self._ping(arguments),
+            DiagnosticOperation.PATH_TRACE: lambda: self.simulator.trace(**arguments),
+            DiagnosticOperation.PATH_COMPARISON: lambda: {
+                "paths": [self.simulator.trace(arguments["source"], arguments["destination"])]
             },
             DiagnosticOperation.COMPARE_CONFIG: lambda: self._config(arguments["device_id"]),
             DiagnosticOperation.RECENT_CHANGES: lambda: self._changes(arguments["device_id"]),

@@ -70,6 +70,10 @@ class AdapterCapability(StrEnum):
     INTERFACE_STATE = "INTERFACE_STATE"
     ROUTES = "ROUTES"
     REACHABILITY = "REACHABILITY"
+    LATENCY = "LATENCY"
+    PATH_TRACE = "PATH_TRACE"
+    PATH_COMPARISON = "PATH_COMPARISON"
+    PROBE_METADATA = "PROBE_METADATA"
     DNS = "DNS"
     SERVICE_CONNECTIVITY = "SERVICE_CONNECTIVITY"
     POLICY = "POLICY"
@@ -209,7 +213,44 @@ class ObservationProvenance(BaseModel):
     freshness: Freshness = Freshness.FRESH
     query_identity: str | None = None
     measurement: str | None = None
+    measurement_id: str | None = None
+    probe_id: str | None = None
+    target: str | None = None
+    measurement_type: str | None = None
+    probe_asn: int | None = None
+    probe_country: str | None = None
     source_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DataSourceClassification(StrEnum):
+    LAB = "LAB"
+    DEMO = "DEMO"
+    LIVE = "LIVE"
+
+
+class DataSourceStatus(StrEnum):
+    AVAILABLE = "AVAILABLE"
+    DEGRADED = "DEGRADED"
+    UNAVAILABLE = "UNAVAILABLE"
+    UNKNOWN = "UNKNOWN"
+
+
+class FreshnessPolicy(BaseModel):
+    max_age_seconds: int = Field(ge=0)
+    description: str
+
+
+class DataSource(BaseModel):
+    id: str
+    adapter_type: str
+    name: str
+    classification: DataSourceClassification
+    read_only: bool
+    capabilities: list[AdapterCapability]
+    status: DataSourceStatus = DataSourceStatus.UNKNOWN
+    last_successful_query: datetime | None = None
+    freshness_policy: FreshnessPolicy
+    configuration: dict[str, Any] = Field(default_factory=dict)
 
 
 class AdapterObservation(BaseModel):
@@ -373,6 +414,32 @@ class InvestigationContext(BaseModel):
     running_summary: str
     available_tools: dict[str, dict[str, Any]]
     operating_mode: OperatingMode = OperatingMode.LAB
+    operator_request: str | None = None
+
+
+class CommentTarget(StrEnum):
+    INVESTIGATION = "INVESTIGATION"
+    EVIDENCE = "EVIDENCE"
+    HYPOTHESIS = "HYPOTHESIS"
+    RUN_EVENT = "RUN_EVENT"
+
+
+class InvestigationComment(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    author: str
+    body: str
+    target_type: CommentTarget = CommentTarget.INVESTIGATION
+    target_id: UUID | None = None
+    request_agent_step: bool = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class InvestigationConclusion(BaseModel):
+    kind: str = Field(pattern="^(ROOT_CAUSE|ASSESSMENT)$")
+    summary: str
+    confidence: float = Field(ge=0, le=1)
+    evidence_ids: list[UUID] = Field(default_factory=list)
+    recorded_at: datetime = Field(default_factory=utc_now)
 
 
 class InvestigationEvent(BaseModel):
@@ -429,6 +496,9 @@ class Incident(BaseModel):
     approval_state: ApprovalState = ApprovalState.NOT_REQUIRED
     approval_records: list[ApprovalRecord] = Field(default_factory=list)
     verification_result: VerificationResult | None = None
+    comments: list[InvestigationComment] = Field(default_factory=list)
+    pending_operator_request: str | None = None
+    conclusion: InvestigationConclusion | None = None
 
     def transition_to(self, target: IncidentStatus) -> None:
         allowed = {

@@ -64,6 +64,12 @@ class LinkInput(BaseModel):
     device_b: str
 
 
+class MeasurementInput(BaseModel):
+    measurement_id: str
+    probe_ids: list[int] = Field(default_factory=list)
+    limit: int = Field(default=500, ge=1, le=5000)
+
+
 class PingTool(Tool[ConnectivityInput]):
     name = "ping"
     input_model = ConnectivityInput
@@ -165,6 +171,45 @@ class PacketLossTool(Tool[ConnectivityInput]):
         return self.adapter.collect(DiagnosticOperation.PACKET_LOSS, inputs.model_dump())
 
 
+class MeasurementTool(Tool[MeasurementInput]):
+    operation: DiagnosticOperation
+    input_model = MeasurementInput
+    retryable = True
+
+    def run(self, inputs: MeasurementInput) -> AdapterObservation:
+        return self.adapter.collect(self.operation, inputs.model_dump())
+
+
+class InspectReachabilityTool(MeasurementTool):
+    name = "inspect_reachability"
+    operation = DiagnosticOperation.PING
+
+
+class InspectLatencyTool(MeasurementTool):
+    name = "inspect_latency"
+    operation = DiagnosticOperation.LATENCY
+
+
+class MeasurePacketLossTool(MeasurementTool):
+    name = "measure_packet_loss"
+    operation = DiagnosticOperation.PACKET_LOSS
+
+
+class TracePathTool(MeasurementTool):
+    name = "trace_path"
+    operation = DiagnosticOperation.PATH_TRACE
+
+
+class ComparePathsTool(MeasurementTool):
+    name = "compare_paths"
+    operation = DiagnosticOperation.PATH_COMPARISON
+
+
+class InspectProbeMetadataTool(MeasurementTool):
+    name = "inspect_probe_metadata"
+    operation = DiagnosticOperation.PROBE_METADATA
+
+
 class CompareConfigTool(Tool[DeviceInput]):
     name = "compare_config_to_baseline"
     input_model = DeviceInput
@@ -241,22 +286,33 @@ def build_registry(
     from relay.tools.registry import ToolRegistry
 
     adapter = SimulatorNetworkAdapter(source) if isinstance(source, NetworkSimulator) else source
-    reads: list[Tool[Any]] = [
-        PingTool(adapter),
-        TracerouteTool(adapter),
-        TopologyTool(adapter),
-        InterfaceStatusTool(adapter),
-        RouteTableTool(adapter),
-        DeviceLogsTool(adapter),
-        DeviceConfigTool(adapter),
-        ResolveDNSTool(adapter),
-        TestTCPTool(adapter),
-        ACLRulesTool(adapter),
-        LinkMetricsTool(adapter),
-        PacketLossTool(adapter),
-        CompareConfigTool(adapter),
-        RecentChangesTool(adapter),
-    ]
+    if adapter.query_style == "measurement":
+        candidates: list[tuple[DiagnosticOperation, Tool[Any]]] = [
+            (DiagnosticOperation.PING, InspectReachabilityTool(adapter)),
+            (DiagnosticOperation.LATENCY, InspectLatencyTool(adapter)),
+            (DiagnosticOperation.PACKET_LOSS, MeasurePacketLossTool(adapter)),
+            (DiagnosticOperation.PATH_TRACE, TracePathTool(adapter)),
+            (DiagnosticOperation.PATH_COMPARISON, ComparePathsTool(adapter)),
+            (DiagnosticOperation.PROBE_METADATA, InspectProbeMetadataTool(adapter)),
+        ]
+    else:
+        candidates = [
+            (DiagnosticOperation.PING, PingTool(adapter)),
+            (DiagnosticOperation.TRACEROUTE, TracerouteTool(adapter)),
+            (DiagnosticOperation.TOPOLOGY, TopologyTool(adapter)),
+            (DiagnosticOperation.INTERFACE_STATUS, InterfaceStatusTool(adapter)),
+            (DiagnosticOperation.ROUTE_TABLE, RouteTableTool(adapter)),
+            (DiagnosticOperation.DEVICE_LOGS, DeviceLogsTool(adapter)),
+            (DiagnosticOperation.DEVICE_CONFIG, DeviceConfigTool(adapter)),
+            (DiagnosticOperation.RESOLVE_DNS, ResolveDNSTool(adapter)),
+            (DiagnosticOperation.TEST_TCP, TestTCPTool(adapter)),
+            (DiagnosticOperation.ACL_RULES, ACLRulesTool(adapter)),
+            (DiagnosticOperation.LINK_METRICS, LinkMetricsTool(adapter)),
+            (DiagnosticOperation.PACKET_LOSS, PacketLossTool(adapter)),
+            (DiagnosticOperation.COMPARE_CONFIG, CompareConfigTool(adapter)),
+            (DiagnosticOperation.RECENT_CHANGES, RecentChangesTool(adapter)),
+        ]
+    reads = [tool for operation, tool in candidates if adapter.supports(operation)]
     writes: list[Tool[Any]] = (
         [
             SetInterfaceAdminStateTool(adapter),

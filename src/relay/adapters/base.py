@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from relay.domain.models import AdapterCapability, AdapterObservation, Inventory, NetworkTopology
+from relay.domain.models import (
+    AdapterCapability,
+    AdapterObservation,
+    DataSource,
+    DataSourceClassification,
+    DataSourceStatus,
+    FreshnessPolicy,
+    Inventory,
+    NetworkTopology,
+)
 
 
 class DiagnosticOperation(StrEnum):
@@ -20,6 +30,10 @@ class DiagnosticOperation(StrEnum):
     ACL_RULES = "acl_rules"
     LINK_METRICS = "link_metrics"
     PACKET_LOSS = "packet_loss"
+    LATENCY = "latency"
+    PATH_TRACE = "path_trace"
+    PATH_COMPARISON = "path_comparison"
+    PROBE_METADATA = "probe_metadata"
     COMPARE_CONFIG = "compare_config"
     RECENT_CHANGES = "recent_changes"
 
@@ -27,7 +41,7 @@ class DiagnosticOperation(StrEnum):
 OPERATION_CAPABILITY: dict[DiagnosticOperation, AdapterCapability] = {
     DiagnosticOperation.TOPOLOGY: AdapterCapability.TOPOLOGY,
     DiagnosticOperation.PING: AdapterCapability.REACHABILITY,
-    DiagnosticOperation.TRACEROUTE: AdapterCapability.REACHABILITY,
+    DiagnosticOperation.TRACEROUTE: AdapterCapability.PATH_TRACE,
     DiagnosticOperation.INTERFACE_STATUS: AdapterCapability.INTERFACE_STATE,
     DiagnosticOperation.ROUTE_TABLE: AdapterCapability.ROUTES,
     DiagnosticOperation.DEVICE_LOGS: AdapterCapability.RECENT_CHANGES,
@@ -37,6 +51,10 @@ OPERATION_CAPABILITY: dict[DiagnosticOperation, AdapterCapability] = {
     DiagnosticOperation.ACL_RULES: AdapterCapability.POLICY,
     DiagnosticOperation.LINK_METRICS: AdapterCapability.LINK_METRICS,
     DiagnosticOperation.PACKET_LOSS: AdapterCapability.PACKET_LOSS,
+    DiagnosticOperation.LATENCY: AdapterCapability.LATENCY,
+    DiagnosticOperation.PATH_TRACE: AdapterCapability.PATH_TRACE,
+    DiagnosticOperation.PATH_COMPARISON: AdapterCapability.PATH_COMPARISON,
+    DiagnosticOperation.PROBE_METADATA: AdapterCapability.PROBE_METADATA,
     DiagnosticOperation.COMPARE_CONFIG: AdapterCapability.CONFIGURATION,
     DiagnosticOperation.RECENT_CHANGES: AdapterCapability.RECENT_CHANGES,
 }
@@ -48,8 +66,12 @@ class NetworkAdapter(ABC):
     adapter_id: str
     display_name: str
     source_type: str
+    query_style: str = "resources"
     read_only: bool
     capabilities: frozenset[AdapterCapability]
+    classification: DataSourceClassification = DataSourceClassification.DEMO
+    freshness_seconds: int = 60
+    last_successful_observation: datetime | None = None
 
     @abstractmethod
     def collect(
@@ -67,6 +89,27 @@ class NetworkAdapter(ABC):
 
     def supports(self, operation: DiagnosticOperation) -> bool:
         return OPERATION_CAPABILITY[operation] in self.capabilities
+
+    def data_source(self) -> DataSource:
+        return DataSource(
+            id=self.adapter_id,
+            adapter_type=self.source_type,
+            name=self.display_name,
+            classification=self.classification,
+            read_only=self.read_only,
+            capabilities=sorted(self.capabilities, key=lambda item: item.value),
+            status=(
+                DataSourceStatus.AVAILABLE
+                if self.classification is DataSourceClassification.LAB
+                or self.last_successful_observation is not None
+                else DataSourceStatus.UNKNOWN
+            ),
+            last_successful_query=self.last_successful_observation,
+            freshness_policy=FreshnessPolicy(
+                max_age_seconds=self.freshness_seconds,
+                description=f"observations older than {self.freshness_seconds}s are stale",
+            ),
+        )
 
 
 class CompositeNetworkAdapter(NetworkAdapter):

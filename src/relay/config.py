@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     fixture_telemetry_url: str = "http://localhost:8001"
     telemetry_timeout_seconds: float = 3
     telemetry_freshness_seconds: int = 60
+    ripe_atlas_url: str = "https://atlas.ripe.net/api/v2"
+    ripe_atlas_timeout_seconds: float = 10
+    ripe_atlas_freshness_seconds: int = 900
     model_config = SettingsConfigDict(env_prefix="RELAY_", env_file=".env")
 
 

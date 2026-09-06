@@ -1,6 +1,6 @@
 # Relay
 
-> Relay is an agentic network incident response platform that autonomously investigates connectivity failures, gathers evidence through diagnostic tools, identifies root causes, proposes human-approved remediation, and verifies recovery.
+> Relay is a live agent investigation platform: one agent runtime performs evidence-backed work against interchangeable network data sources.
 
 Relay combines an incident-isolated deterministic network laboratory, read-only external telemetry, durable agent runs, a replayable event stream, and an interactive NOC console. Every structured plan, tool call, observation, hypothesis revision, approval, write, and recovery check is stored and visible; hidden model reasoning is not.
 
@@ -36,23 +36,18 @@ These are captured from the running simulator-backed application.
 | --- | --- |
 | ![Exact-action approval](docs/screenshots/approval.jpg) | ![Evaluation dashboard](docs/screenshots/evaluations.jpg) |
 
-## Architecture
+## Architecture: one agent runtime, interchangeable sources
 
 ```mermaid
 flowchart TB
- UI[React + TypeScript console] -->|typed HTTP + SSE replay| API[FastAPI]
- API --> SERVICE[IncidentService]
- SERVICE --> RUNS[Durable AgentRun lifecycle]
- RUNS --> EVENTS[(Ordered operational events)]
- RUNS --> RUNTIME[AgentRuntime]
- RUNTIME --> PLANNER[Deterministic or OpenAI-compatible planner]
- RUNTIME --> REGISTRY[Typed tool registry]
- REGISTRY --> ADAPTER[Typed NetworkAdapter]
- ADAPTER --> SIM[LAB: incident-scoped simulator]
- ADAPTER --> HTTP[OBSERVE: structured HTTP telemetry]
- HTTP --> FIXTURE[Local fixture telemetry service]
- SERVICE --> DB[(SQLite incident aggregates + run events)]
- EVAL[Evaluation harness] --> SERVICE
+ RUNTIME[AgentRuntime] --> REGISTRY[Capability-driven typed tool registry]
+ REGISTRY --> ADAPTER[NetworkAdapter]
+ ADAPTER --> LAB[LAB · SIMULATED]
+ ADAPTER --> RIPE[RIPE Atlas · LIVE]
+ ADAPTER --> HTTP[Fixture HTTP · DEMO]
+ ADAPTER -. same contract .-> FUTURE[Prometheus / OTel / SNMP / cloud]
+ RIPE --> INTERNET[Live public Internet]
+ RUNTIME --> STATE[(Evidence · hypotheses · assessments · events · comments)]
 ```
 
 - `src/relay/domain`: incident, topology, evidence, hypothesis, run, approval, and verification models.
@@ -65,7 +60,7 @@ flowchart TB
 
 ## Agent runtime and tools
 
-The runtime receives a bounded `InvestigationContext`, requests one structured `AgentDecision`, validates it, executes only registered tools, records evidence, and maintains hypothesis revisions. A durable run moves through `QUEUED → RUNNING → AWAITING_APPROVAL → COMPLETED`, with `BLOCKED`, `FAILED`, and `CANCELLED` terminal paths. It records provider/model, timestamps, current/max steps, tool-call count, errors, and the latest event sequence.
+The runtime receives only a bounded `InvestigationContext`, available tool schemas, prior evidence, hypotheses, and tool results. It has no RIPE Atlas, fixture, or scenario branches. The registry is constructed from adapter capabilities, so unsupported operations are absent rather than simulated. A durable run records every decision, typed call, observation, hypothesis revision, assessment, and operator comment.
 
 Operational events are monotonically sequenced within the persisted incident aggregate. The stream includes run lifecycle, decisions, tool start/completion/failure, evidence, hypothesis revisions, remediation, approval, verification, cancellation, and completion. `GET /incidents/{incident_id}/runs/{run_id}/events` replays with `Last-Event-ID` or `after=<sequence>` and then follows new events over SSE. The payload contains structured operational facts—not hidden chain-of-thought or fake token streaming.
 
@@ -79,13 +74,19 @@ Writes cannot execute without approval. A remediation stores the exact tool and 
 
 `LAB` investigates an incident-isolated deterministic simulator. Its existing six scenarios, exact-action approval, guarded remediation, verification, and evaluation behavior are preserved.
 
-`OBSERVE` investigates external telemetry through the same `AgentRuntime` and tool names, but its registry contains no write tools. Approval and remediation endpoints independently reject OBSERVE incidents and append an `OBSERVE_WRITE_REJECTED` audit event. There is no shell, arbitrary-command, or hidden production-write path.
+`OBSERVE` investigates DEMO or LIVE telemetry through the same `AgentRuntime`, evidence model, hypotheses, and run lifecycle. Its registry contains no write tools. Approval and remediation endpoints independently reject OBSERVE incidents and append an `OBSERVE_WRITE_REJECTED` audit event. There is no shell, arbitrary-command, or hidden production-write path.
 
 The operating mode and data-source IDs are persisted on the incident and every agent run, included in operational events, and displayed in the console.
 
 ## Adapter and capability model
 
-`NetworkAdapter` is a framework-neutral interface for a finite `DiagnosticOperation` set: topology, interface state, routes, reachability, DNS, service connectivity, policy, link metrics, packet loss, configuration, recent changes, and inventory. `SimulatorNetworkAdapter` implements it for LAB; `HTTPTelemetryAdapter` consumes a versioned structured JSON/HTTP contract.
+`NetworkAdapter` is the provider boundary for identity, classification, read-only state, health, freshness policy, inventory/topology, capabilities, and diagnostic collection. Its finite operations include topology, reachability, latency, packet loss, path trace/comparison, interface state, routes, DNS, service connectivity, policy, link metrics, configuration, recent changes, and probe metadata.
+
+| Source | Classification | Read only | Capabilities |
+| --- | --- | --- | --- |
+| Relay Lab | SIMULATED / LAB | No; writes require exact approval | topology, inventory, reachability, latency, loss, paths, interfaces, routes, DNS, service, policy, links, configuration, changes |
+| RIPE Atlas | LIVE | Yes | reachability, latency, packet loss, path trace, path comparison, probe metadata, observed path topology |
+| Fixture HTTP | DEMO | Yes | topology, inventory, reachability/path, interfaces, routes, link metrics, packet loss |
 
 Adapters declare `AdapterCapability` values. Queries return `SUCCESS`, `UNSUPPORTED`, `UNAVAILABLE`, `STALE`, or `FAILED`; Relay records missing observations explicitly and never fabricates an answer. `CompositeNetworkAdapter` provides a small ordered multi-source boundary without introducing a distributed data platform.
 
@@ -93,7 +94,17 @@ Adapters declare `AdapterCapability` values. Queries return `SUCCESS`, `UNSUPPOR
 
 `GET /inventory?source_id=...` returns vendor-neutral devices, interfaces, services, and links with stable IDs, optional management metadata, labels, status, telemetry source, and last-observed time. `GET /integrations` lists connection state, read-only status, capabilities, and last observation.
 
-Every evidence item records source type, adapter, resource ID, source observation time, collection time, freshness, query identity, tool-call ID, and run ID. Provider metadata is normalized and credentials are never persisted or returned. The HTTP adapter compares timestamps with `RELAY_TELEMETRY_FRESHNESS_SECONDS`; stale values remain visible but are excluded from root-cause evidence. Unavailable means the source could not answer, not that the tested condition was false.
+Every evidence item records provider, adapter, resource and measurement IDs, probe ID where applicable, target, measurement type, source observation time, collection time, freshness, query identity, tool-call ID, run ID, and only source-supplied ASN/country metadata. Stale values remain visible but reduce assessment confidence. Unavailable means the source could not answer, not that the tested condition was false.
+
+## Live RIPE Atlas workflow
+
+1. Open **Investigations** and choose **RIPE Atlas — LIVE PUBLIC INTERNET**.
+2. Enter a public ping or traceroute measurement ID. Relay loads current metadata from the official public REST API.
+3. Start the investigation. The normal `AgentRuntime` selects only registered RIPE tools and persists real observations as evidence.
+4. Review the activity stream and the evidence-backed **ASSESSMENT**. Relay does not claim observational telemetry is ground truth.
+5. Add a comment, annotate evidence or a hypothesis through the API, or request a follow-up such as “Check whether affected probes share an ASN.”
+
+RIPE Atlas failures, malformed responses, timeouts, and rate limiting are surfaced truthfully. Runtime never falls back to fixture data. The adapter is read-only and exposes no measurement-creation or mutation call.
 
 ## Network simulator
 
@@ -195,6 +206,7 @@ Add contract, timeout, malformed-response, freshness, and safety cases to the se
 ```bash
 make eval          # six deterministic LAB scenarios
 make adapter-eval  # read-only HTTP fixture telemetry
+make recorded-live-eval # agent behavior on recorded RIPE responses; no Internet required
 ```
 
 ## Known limitations and roadmap
@@ -202,10 +214,10 @@ make adapter-eval  # read-only HTTP fixture telemetry
 - Execution uses FastAPI in-process background tasks rather than an external worker queue; a process crash can leave a run marked `RUNNING` for operator inspection.
 - SSE is backed by persisted aggregate events and local follow loops; horizontal fan-out would require a shared notification mechanism.
 - Simulator reconstruction replays approved writes; it does not preserve transient counters or injected one-shot tool failures.
-- The deterministic planner favors reproducibility over minimizing scenario-specific calls.
+- The deterministic planner remains intentionally reproducible; a configured AI planner can choose among the same bounded schemas.
 - Full workflow coverage is API integration plus component tests; Playwright is intentionally not added yet.
-- The HTTP adapter currently targets the bounded structured telemetry contract; Prometheus query templates, authentication/RBAC, and secret-manager integration remain future work.
-- OBSERVE deliberately cannot remediate. Completion means a root-cause assessment, not that the external fault was repaired.
+- Prometheus is intentionally deferred; the strengthened source contract is its extension point.
+- OBSERVE deliberately cannot remediate. Completion is an assessment, not proof of root cause or recovery.
 - Inventory is queried on demand and evidence is stored in incident aggregates; Relay is not a telemetry warehouse.
 - Arbitrary shell execution is intentionally unsupported.
 

@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from relay.api.dependencies import get_incident_service, get_simulator
 from relay.api.schemas import (
     AgentRunRequest,
+    CommentCreate,
     IncidentCreate,
     RemediationApproval,
     RemediationRejection,
@@ -122,6 +123,14 @@ def observe_datasets() -> list[dict[str, str]]:
 @router.get("/integrations")
 def integrations(service: Service) -> list[dict[str, object]]:
     return service.integrations()
+
+
+@router.get("/sources/ripe-atlas/measurements/{measurement_id}")
+def ripe_measurement(measurement_id: str, service: Service) -> dict[str, object]:
+    try:
+        return service.ripe_measurement_metadata(measurement_id)
+    except (RuntimeError, TimeoutError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/inventory", response_model=Inventory)
@@ -402,6 +411,16 @@ def get_hypotheses(incident_id: UUID, service: Service) -> list[Hypothesis]:
 @router.get("/incidents/{incident_id}/actions", response_model=list[AgentAction])
 def get_actions(incident_id: UUID, service: Service) -> list[AgentAction]:
     return _get(service, incident_id).actions
+
+
+@router.post("/incidents/{incident_id}/comments", response_model=Incident)
+def add_comment(incident_id: UUID, payload: CommentCreate, service: Service) -> Incident:
+    try:
+        return service.add_comment(incident_id, **payload.model_dump())
+    except IncidentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/incidents/{incident_id}/remediations", response_model=list[ProposedRemediation])

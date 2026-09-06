@@ -34,6 +34,8 @@ export const api = {
   incident: (id: string) => request<Incident>(`/incidents/${id}`),
   scenarios: () => request<Scenario[]>("/scenarios"),
   observeDatasets: () => request<Scenario[]>("/observe/datasets"),
+  ripeMeasurement: (id: string) =>
+    request<Record<string, unknown>>(`/sources/ripe-atlas/measurements/${id}`),
   integrations: () => request<Integration[]>("/integrations"),
   topology: (id?: string) =>
     request<Topology>(
@@ -61,6 +63,37 @@ export const api = {
         operating_mode: operatingMode,
         data_source_ids: operatingMode === "LAB" ? ["lab-simulator"] : ["fixture-http"],
         resource_ids: [scenario.source_device, scenario.destination_device],
+      }),
+    }),
+  createRipe: (measurementId: string, metadata: Record<string, unknown>) =>
+    request<Incident>("/incidents", {
+      method: "POST",
+      body: JSON.stringify({
+        title: `RIPE Atlas measurement ${measurementId}`,
+        description: `Live ${String(metadata.type ?? "public")} measurement to ${String(metadata.target ?? "target")}`,
+        source_device: measurementId,
+        destination_device: String(metadata.target ?? "target"),
+        scenario: measurementId,
+        operating_mode: "OBSERVE",
+        data_source_ids: ["ripe-atlas"],
+        resource_ids: [measurementId],
+      }),
+    }),
+  comment: (
+    incidentId: string,
+    body: string,
+    requestAgentStep = false,
+    targetType = "INVESTIGATION",
+    targetId?: string,
+  ) =>
+    request<Incident>(`/incidents/${incidentId}/comments`, {
+      method: "POST",
+      body: JSON.stringify({
+        author: "relay-console",
+        body,
+        request_agent_step: requestAgentStep,
+        target_type: targetType,
+        target_id: targetId,
       }),
     }),
   start: (id: string, planner: string) =>

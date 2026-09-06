@@ -1,0 +1,28 @@
+{
+  "dataset": "recorded-ripe-ping-loss",
+  "tool_selection_valid": true,
+  "selected_tools": [
+    "inspect_reachability",
+    "measure_packet_loss",
+    "inspect_latency",
+    "trace_path",
+    "compare_paths"
+  ],
+  "evidence_extracted": true,
+  "unsupported_operation_handled": true,
+  "conclusion_grounded": true,
+  "read_only_safe": true,
+  "assessment": {
+    "kind": "ASSESSMENT",
+    "summary": "Elevated packet loss is present across observed probes",
+    "confidence": 0.8,
+    "evidence_ids": [
+      "93cd9c06-85f4-4efd-9e9c-d1858a29fb4c",
+      "c817115e-1cd5-4dd1-961c-4d7661af530a",
+      "1d6082e4-7188-4cae-a5d4-cbede8149b0b",
+      "04c821f1-779b-4452-9c29-697167f38c6b",
+      "3aa138db-a5fb-466a-9149-43825e6a954f"
+    ],
+    "recorded_at": "2026-09-06T20:25:51.950450Z"
+  }
+}

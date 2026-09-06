@@ -65,27 +65,7 @@ class DeterministicPlanner:
         done = [call.tool_name for call in context.recent_tool_calls]
         endpoints = {"source": context.source_device, "destination": context.destination_device}
         if context.operating_mode is OperatingMode.OBSERVE:
-            sequence: list[tuple[str, dict[str, Any], str]] = [
-                ("get_network_topology", {}, "Capture external topology"),
-                ("ping", endpoints, "Test observed reachability"),
-                ("traceroute", endpoints, "Locate observed path failure"),
-                (
-                    "get_route_table",
-                    {"device_id": context.source_device},
-                    "Inspect observed source route",
-                ),
-                (
-                    "get_interface_status",
-                    {"device_id": "core-01", "interface_name": "eth1"},
-                    "Inspect observed uplink",
-                ),
-                (
-                    "get_link_metrics",
-                    {"device_a": context.source_device, "device_b": "core-01"},
-                    "Inspect observed link health",
-                ),
-                ("get_packet_loss", endpoints, "Measure observed packet loss"),
-            ]
+            return self._observe_decision(context, done, endpoints)
         else:
             sequence = [
                 ("get_network_topology", {}, "Capture bounded topology"),
@@ -129,14 +109,6 @@ class DeterministicPlanner:
                 hypothesis_status=HypothesisStatus.CONFIRMED,
                 supporting_evidence_ids=[e.id for e in context.evidence],
             )
-        if context.operating_mode is OperatingMode.OBSERVE:
-            return AgentDecision(
-                kind=ActionKind.DECLARE_RESOLVED,
-                summary=(
-                    "Read-only root-cause assessment completed; remediation is intentionally "
-                    "unavailable in OBSERVE mode"
-                ),
-            )
         return AgentDecision(
             kind=ActionKind.PROPOSE_REMEDIATION,
             summary="Propose evidence-backed remediation",
@@ -144,6 +116,136 @@ class DeterministicPlanner:
             arguments=finding[3],
             remediation_description=finding[4],
         )
+
+    def _observe_decision(
+        self, context: InvestigationContext, done: list[str], endpoints: dict[str, str]
+    ) -> AgentDecision:
+        available = set(context.available_tools)
+        measurement = {"measurement_id": context.source_device}
+        sequences: list[tuple[str, dict[str, Any], str]] = [
+            ("inspect_reachability", measurement, "Inspect measurement reachability"),
+            ("measure_packet_loss", measurement, "Measure packet loss across probes"),
+            ("inspect_latency", measurement, "Inspect latency distribution across probes"),
+            ("trace_path", measurement, "Inspect observed paths from probes to target"),
+            ("compare_paths", measurement, "Compare paths across probes"),
+            ("get_network_topology", {}, "Capture external topology"),
+            ("ping", endpoints, "Test observed reachability"),
+            ("traceroute", endpoints, "Locate observed path failure"),
+            (
+                "get_route_table",
+                {"device_id": context.source_device},
+                "Inspect observed source route",
+            ),
+            (
+                "get_interface_status",
+                {"device_id": "core-01", "interface_name": "eth1"},
+                "Inspect observed uplink",
+            ),
+            (
+                "get_link_metrics",
+                {"device_a": context.source_device, "device_b": "core-01"},
+                "Inspect observed link health",
+            ),
+            ("get_packet_loss", endpoints, "Measure observed packet loss"),
+        ]
+        if (
+            context.operator_request
+            and "inspect_probe_metadata" in available
+            and "inspect_probe_metadata" not in done
+        ):
+            probe_ids = self._observed_probe_ids(context)
+            return AgentDecision(
+                kind=ActionKind.RUN_TOOL,
+                tool_name="inspect_probe_metadata",
+                arguments={**measurement, "probe_ids": probe_ids},
+                summary=f"Operator follow-up: {context.operator_request}",
+            )
+        for name, arguments, summary in sequences:
+            if name in available and name not in done:
+                return AgentDecision(
+                    kind=ActionKind.RUN_TOOL, tool_name=name, arguments=arguments, summary=summary
+                )
+        finding, confidence = self._live_finding(context)
+        if not context.active_hypotheses:
+            return AgentDecision(
+                kind=ActionKind.UPDATE_HYPOTHESIS,
+                summary=f"Assessment updated: {finding}",
+                hypothesis=finding,
+                confidence=confidence,
+                hypothesis_status=HypothesisStatus.CONFIRMED,
+                supporting_evidence_ids=[item.id for item in context.evidence],
+            )
+        return AgentDecision(
+            kind=ActionKind.DECLARE_RESOLVED,
+            summary=f"Assessment complete: {context.active_hypotheses[-1].statement}",
+        )
+
+    @staticmethod
+    def _observed_probe_ids(context: InvestigationContext) -> list[int]:
+        ids: list[int] = []
+        for evidence in context.evidence:
+            for probe in evidence.observation.get("probes", []):
+                value = probe.get("probe_id") if isinstance(probe, dict) else None
+                if isinstance(value, int) and value not in ids:
+                    ids.append(value)
+        return ids[:50]
+
+    @staticmethod
+    def _live_finding(context: InvestigationContext) -> tuple[str, float]:
+        if not context.evidence:
+            return "Insufficient evidence from the selected telemetry source", 0.2
+        if all(item.provenance.freshness is not Freshness.FRESH for item in context.evidence):
+            return "Telemetry is stale; current network state cannot be assessed reliably", 0.35
+        observations = [item.observation for item in context.evidence]
+        topology = next((item for item in observations if "devices" in item), {})
+        down = next(
+            (
+                f"{device['id']}/{interface['name']}"
+                for device in topology.get("devices", [])
+                for interface in device.get("interfaces", [])
+                if interface.get("operational_up") is False
+            ),
+            None,
+        )
+        if down:
+            return f"{down} is operationally down", 0.9
+        routes = next((item.get("routes") for item in observations if "routes" in item), None)
+        if isinstance(routes, dict) and routes.get(context.destination_device) in {None, "discard"}:
+            return (
+                f"{context.source_device} has an anomalous route to {context.destination_device}",
+                0.85,
+            )
+        metrics = next(
+            (
+                item
+                for item in observations
+                if "latency_ms" in item and "packet_loss_percent" in item
+            ),
+            {},
+        )
+        if metrics.get("packet_loss_percent", 0) > 5 or metrics.get("latency_ms", 0) > 100:
+            return "Observed link telemetry is degraded", 0.8
+        path = next((item for item in reversed(observations) if "distinct_path_count" in item), {})
+        ping = next(
+            (item for item in reversed(observations) if "reachable_probe_count" in item), {}
+        )
+        total = int(ping.get("probe_count", 0))
+        reachable = int(ping.get("reachable_probe_count", 0))
+        loss = ping.get("average_packet_loss_percent")
+        latency = ping.get("median_rtt_ms")
+        if total and reachable == 0:
+            return "Target unreachable from all observed probes", 0.9
+        if total and 0 < reachable < total:
+            return "Partial or regional reachability degradation", 0.78
+        if isinstance(loss, (int, float)) and loss > 5:
+            return "Elevated packet loss is present across observed probes", 0.8
+        if isinstance(latency, (int, float)) and latency > 200:
+            return "Elevated latency is present across observed probes", 0.7
+        if int(path.get("distinct_path_count", 0)) > 1:
+            return "Observed paths diverge across probes; path instability is possible", 0.65
+        if total:
+            return "No material reachability or packet-loss degradation is visible", 0.72
+        return "Insufficient evidence from the selected telemetry source", 0.3
 
     @staticmethod
     def _finding(context: InvestigationContext) -> tuple[str, str, str, dict[str, Any], str]:

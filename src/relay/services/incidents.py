@@ -14,12 +14,15 @@ from relay.domain.models import (
     AgentRunStatus,
     ApprovalRecord,
     ApprovalState,
+    CommentTarget,
+    DataSourceClassification,
     Evidence,
     Hypothesis,
     HypothesisStatus,
     Incident,
     IncidentStatus,
     Inventory,
+    InvestigationComment,
     InvestigationEvent,
     InvestigationRun,
     NetworkTopology,
@@ -83,11 +86,12 @@ class IncidentService:
         )
         registry, runtime = self._new_incident_runtime(incident)
         self._incident_runtimes[incident.id] = (registry, runtime)
-        topology = registry.adapter.topology()
-        device_ids = {device.id for device in topology.devices}
-        unknown = {source_device, destination_device} - device_ids
-        if unknown:
-            raise ValueError(f"unknown incident device(s): {', '.join(sorted(unknown))}")
+        if registry.adapter.classification is not DataSourceClassification.LIVE:
+            topology = registry.adapter.topology()
+            device_ids = {device.id for device in topology.devices}
+            unknown = {source_device, destination_device} - device_ids
+            if unknown:
+                raise ValueError(f"unknown incident device(s): {', '.join(sorted(unknown))}")
         self.repository.save(incident)
         return incident
 
@@ -128,17 +132,7 @@ class IncidentService:
         return factory(placeholder).inventory()
 
     def integrations(self) -> builtins.list[dict[str, Any]]:
-        rows = [
-            {
-                "id": "lab-simulator",
-                "name": self.registry.adapter.display_name,
-                "type": self.registry.adapter.source_type,
-                "status": "CONNECTED",
-                "capabilities": sorted(x.value for x in self.registry.adapter.capabilities),
-                "read_only": False,
-                "last_successful_observation": None,
-            }
-        ]
+        rows = [self.registry.adapter.data_source().model_dump(mode="json")]
         for source_id, factory in self.adapter_factories.items():
             placeholder = Incident(
                 title="integration",
@@ -168,18 +162,89 @@ class IncidentService:
                 last_observed = max(timestamps, default=None)
             except RuntimeError:
                 connection_status = "UNAVAILABLE"
-            rows.append(
-                {
-                    "id": source_id,
-                    "name": adapter.display_name,
-                    "type": adapter.source_type,
-                    "status": connection_status,
-                    "capabilities": sorted(x.value for x in adapter.capabilities),
-                    "read_only": adapter.read_only,
-                    "last_successful_observation": last_observed,
-                }
-            )
+            source = adapter.data_source().model_dump(mode="json")
+            is_demo = adapter.classification is DataSourceClassification.DEMO
+            if connection_status != "CONNECTED":
+                source["status"] = connection_status
+            elif last_observed is not None or is_demo:
+                source["status"] = "AVAILABLE"
+            source["last_successful_query"] = last_observed
+            rows.append(source)
         return rows
+
+    def ripe_measurement_metadata(self, measurement_id: str) -> dict[str, Any]:
+        from relay.adapters.ripe_atlas import RIPEAtlasAdapter
+
+        placeholder = Incident(
+            title="measurement",
+            description="measurement",
+            source_device=measurement_id,
+            destination_device=measurement_id,
+            operating_mode=OperatingMode.OBSERVE,
+            data_source_ids=["ripe-atlas"],
+            scenario=measurement_id,
+        )
+        factory = self.adapter_factories.get("ripe-atlas")
+        if factory is None:
+            raise ValueError("RIPE Atlas source is not configured")
+        adapter = factory(placeholder)
+        if not isinstance(adapter, RIPEAtlasAdapter):
+            raise ValueError("RIPE Atlas source is misconfigured")
+        return adapter.measurement_metadata(measurement_id)
+
+    def add_comment(
+        self,
+        incident_id: UUID,
+        author: str,
+        body: str,
+        target_type: CommentTarget = CommentTarget.INVESTIGATION,
+        target_id: UUID | None = None,
+        request_agent_step: bool = False,
+    ) -> Incident:
+        incident = self.get(incident_id)
+        valid_targets = {
+            CommentTarget.EVIDENCE: {item.id for item in incident.evidence},
+            CommentTarget.HYPOTHESIS: {item.id for item in incident.hypotheses},
+            CommentTarget.RUN_EVENT: {item.event_id for item in incident.events},
+        }
+        if (
+            target_type is not CommentTarget.INVESTIGATION
+            and target_id not in valid_targets[target_type]
+        ):
+            raise ValueError("comment target does not belong to this investigation")
+        comment = InvestigationComment(
+            author=author,
+            body=body,
+            target_type=target_type,
+            target_id=target_id,
+            request_agent_step=request_agent_step,
+        )
+        incident.comments.append(comment)
+        run_id = incident.investigation_runs[-1].id if incident.investigation_runs else UUID(int=0)
+        sequence = max((event.sequence for event in incident.events), default=0) + 1
+        incident.events.append(
+            InvestigationEvent(
+                sequence=sequence,
+                incident_id=incident.id,
+                run_id=run_id,
+                type="OPERATOR_COMMENT_ADDED",
+                payload={
+                    "summary": body,
+                    "author": author,
+                    "comment_id": str(comment.id),
+                    "target_type": target_type.value,
+                    "target_id": str(target_id) if target_id else None,
+                },
+            )
+        )
+        if request_agent_step:
+            incident.pending_operator_request = body
+            if incident.status is IncidentStatus.RESOLVED:
+                incident.status = IncidentStatus.OPEN
+                incident.conclusion = None
+        incident.updated_at = datetime.now(UTC)
+        self.repository.save(incident)
+        return incident
 
     def reject_remediation(self, incident_id: UUID, rejected_by: str, reason: str) -> Incident:
         incident = self.get(incident_id)

@@ -460,6 +460,34 @@ button svg {
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
+
+.ripe-picker,
+.operator-input {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.ripe-picker input,
+.operator-input textarea {
+  width: 100%;
+  box-sizing: border-box;
+  color: var(--text);
+  background: #080b0e;
+  border: 1px solid var(--line);
+  padding: 12px;
+  font: inherit;
+}
+
+.operator-input {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 18px;
+}
+
+.operator-input textarea { min-height: 86px; resize: vertical; }
+.operator-input > div { display: flex; gap: 8px; }
+.conclusion { border-left: 3px solid var(--accent); margin-bottom: 18px; }
 .scenario-grid button {
   min-height: 116px;
   border: 1px solid #263343;
