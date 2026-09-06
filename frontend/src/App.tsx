@@ -4,6 +4,7 @@ import {
   Bell,
   GitBranch,
   LayoutDashboard,
+  Home as HomeIcon,
   ListChecks,
   Network,
   Radio,
@@ -12,6 +13,7 @@ import {
 import { NavLink, Route, Routes } from "react-router-dom";
 import {
   Evaluations,
+  Home,
   IncidentPage,
   Incidents,
   Overview,
@@ -33,6 +35,10 @@ export default function App() {
         </div>
         <nav>
           <NavLink to="/">
+            <HomeIcon />
+            Home
+          </NavLink>
+          <NavLink to="/overview">
             <LayoutDashboard />
             Overview
           </NavLink>
@@ -69,7 +75,8 @@ export default function App() {
           </div>
         </header>
         <Routes>
-          <Route path="/" element={<Overview />} />
+          <Route path="/" element={<Home />} />
+          <Route path="/overview" element={<Overview />} />
           <Route path="/incidents" element={<Incidents />} />
           <Route path="/incidents/:id" element={<IncidentPage />} />
           <Route path="/topology" element={<TopologyPage />} />

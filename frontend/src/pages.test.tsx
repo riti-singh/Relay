@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Evaluations, IncidentPage, Incidents } from "./pages";
+import { Evaluations, Home, IncidentPage, Incidents } from "./pages";
 vi.mock("cytoscape", () => ({
   default: vi.fn(() => ({
     on: vi.fn(),
@@ -12,6 +12,14 @@ vi.mock("cytoscape", () => ({
 }));
 afterEach(() => vi.restoreAllMocks());
 describe("data views", () => {
+  it("explains Relay and provides dismissible first-run guidance", async () => {
+    render(<MemoryRouter><Home /></MemoryRouter>);
+    expect(screen.getByText("Understand the failure. Approve the change. Verify recovery.")).toBeInTheDocument();
+    expect(screen.getByText("Your first investigation")).toBeInTheDocument();
+    expect(screen.getByText("Start an investigation")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Dismiss guide"));
+    expect(screen.getByText("Show first-run guide")).toBeInTheDocument();
+  });
   it("creates an incident from a scenario", async () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")

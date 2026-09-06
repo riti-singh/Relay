@@ -96,9 +96,21 @@ export interface Action {
 }
 export interface Run {
   id: string;
+  incident_id?: string;
+  status: "QUEUED" | "RUNNING" | "AWAITING_APPROVAL" | "COMPLETED" | "FAILED" | "CANCELLED" | "BLOCKED";
+  provider: string;
+  model: string;
+  requested_at: string;
   plan: string[];
-  started_at: string;
+  started_at?: string;
   completed_at?: string;
+  cancelled_at?: string;
+  current_step: number;
+  max_steps: number;
+  tool_call_count: number;
+  error_category?: string;
+  error_message?: string;
+  last_event_sequence: number;
   outcome?: string;
   steps_used: number;
 }
@@ -124,12 +136,7 @@ export interface Incident {
   investigation_summary: string;
   investigation_runs: Run[];
   actions: Action[];
-  events: {
-    run_id: string;
-    event_type: string;
-    summary: string;
-    timestamp: string;
-  }[];
+  events: RunEvent[];
   tool_calls: ToolCall[];
   evidence: Evidence[];
   hypotheses: Hypothesis[];
@@ -142,6 +149,15 @@ export interface Incident {
     tool_call_ids: string[];
     recorded_at: string;
   };
+}
+export interface RunEvent {
+  event_id: string;
+  sequence: number;
+  incident_id: string;
+  run_id: string;
+  type: string;
+  payload: Record<string, unknown> & { summary?: string };
+  timestamp: string;
 }
 export interface Scenario {
   id: string;
