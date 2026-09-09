@@ -814,7 +814,7 @@ pre {
   margin-top: 7px;
 }
 .approval {
-  border: 1px solid #8d5a23;
+  border: 1px solid #5c5c5c;
   background: #121212;
   margin-top: 14px;
 }
@@ -859,8 +859,9 @@ pre {
   cursor: pointer;
 }
 .approval-actions .approve {
-  background: #9a4d0b;
-  border-color: #d06c15;
+  background: #ededed;
+  border-color: #ededed;
+  color: #0a0a0a;
 }
 .verification {
   margin-top: 14px;
