@@ -204,11 +204,17 @@ def test_unsupported_and_missing_resource() -> None:
     assert missing.message and "resource" in missing.message
 
 
+def http_error(code: int) -> error.HTTPError:
+    return error.HTTPError("https://stat.ripe.net/data/x", code, "err", {}, None)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     "raise_exc, expected",
     [
         (lambda: error.URLError("connection refused"), ObservationStatus.UNAVAILABLE),
         (lambda: TimeoutError("deadline exceeded"), ObservationStatus.UNAVAILABLE),
+        (lambda: http_error(503), ObservationStatus.UNAVAILABLE),
+        (lambda: http_error(400), ObservationStatus.FAILED),
     ],
 )
 def test_unavailable_paths(

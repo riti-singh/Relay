@@ -110,6 +110,18 @@ class RIPEstatAdapter(NetworkAdapter):
                 if is_stale
                 else None,
             )
+        except error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                return AdapterObservation(
+                    status=ObservationStatus.FAILED,
+                    provenance=provenance,
+                    message=f"RIPEstat rejected the query for {resource!r}: HTTP {exc.code}",
+                )
+            return AdapterObservation(
+                status=ObservationStatus.UNAVAILABLE,
+                provenance=provenance,
+                message=f"RIPEstat unavailable: {exc}",
+            )
         except (error.URLError, TimeoutError) as exc:
             return AdapterObservation(
                 status=ObservationStatus.UNAVAILABLE,
