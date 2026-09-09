@@ -29,7 +29,7 @@ class RIPEstatAdapter(NetworkAdapter):
 
     source_type = "ripestat"
     read_only = True
-    capabilities = frozenset({AdapterCapability.ROUTES})
+    capabilities = frozenset({AdapterCapability.ROUTES, AdapterCapability.BGP_VISIBILITY})
 
     def __init__(
         self,
