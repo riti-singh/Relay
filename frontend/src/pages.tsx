@@ -132,34 +132,6 @@ export function Overview() {
             />
           )}
         </section>
-        <section className="panel health">
-          <PanelTitle title="Network health" meta="5 DEVICES · 4 LINKS" />
-          <div className="health-ring">
-            <span>98</span>
-            <small>HEALTH SCORE</small>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="good-dot" />
-              Control plane
-            </span>
-            <b>HEALTHY</b>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="good-dot" />
-              Simulator
-            </span>
-            <b>ONLINE</b>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="blue-dot" />
-              Planner
-            </span>
-            <b>READY</b>
-          </div>
-        </section>
       </div>
     </Page>
   );
@@ -420,7 +392,6 @@ export function IncidentPage() {
           <div className="incident-tags">
             <Status value={incident.status} />
             <Status value={incident.operating_mode ?? "LAB"} />
-            <span>P2 · HIGH</span>
             <span>{scenarioName(incident.scenario)}</span>
           </div>
           <h1>{incident.title}</h1>
