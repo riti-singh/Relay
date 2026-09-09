@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     fixture_telemetry_url: str = "http://localhost:8001"
     telemetry_timeout_seconds: float = 3
     telemetry_freshness_seconds: int = 60
+    ripestat_base_url: str = "https://stat.ripe.net/data"
+    ripestat_freshness_seconds: int = 43200
     model_config = SettingsConfigDict(env_prefix="RELAY_", env_file=".env")
 
 
