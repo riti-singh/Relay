@@ -1082,14 +1082,16 @@ pre {
 .path-scene .link { stroke: #3a3a3a; stroke-width: 2; }
 .path-scene .link-fail { transition: stroke .4s; }
 .path-scene.broken .link-fail { stroke: var(--red); stroke-dasharray: 6 6; animation: dash 1s linear infinite, flicker 4s ease-in-out infinite; }
-.path-scene.healed .link-fail { stroke: var(--accent); stroke-dasharray: 0; }
+.path-scene.healed .link-fail { stroke: var(--red); stroke-dasharray: 6 6; animation: dash 1s linear 2, heal 1s 1.6s ease both; }
 .path-scene .node circle { fill: #141414; stroke: #5c5c5c; stroke-width: 2; }
 .path-scene .node text { fill: var(--muted); font: 10px var(--mono); }
 .path-scene.broken .node-suspect circle { stroke: var(--red); animation: ring 2s ease-in-out infinite; }
-.path-scene.healed .node-suspect circle { stroke: var(--accent); }
+.path-scene.healed .node-suspect circle { stroke: var(--red); animation: heal-node 1s 1.6s ease both; }
 .path-scene .packet { fill: var(--accent); }
 .path-scene.broken .packet { animation: drop 4s linear infinite; }
 @keyframes dash { to { stroke-dashoffset: -12; } }
+@keyframes heal { to { stroke: var(--accent); stroke-dasharray: 12 0; } }
+@keyframes heal-node { to { stroke: var(--accent); } }
 @keyframes flicker { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
 @keyframes ring { 0%,100% { stroke-width: 2; } 50% { stroke-width: 5; } }
 @keyframes drop { 0%,38% { opacity: 1; } 42%,100% { opacity: 0; } }
@@ -1112,8 +1114,8 @@ pre {
 .chapter-stage { min-height: 220px; display: grid; align-content: center; }
 .chapter-stage > * { animation-play-state: paused; }
 .chapter.in .chapter-stage > * { animation-play-state: running; }
-.chapter-stage .term-line, .chapter-stage .term-result, .chapter-stage .ev, .chapter-stage .hyp, .chapter-stage .hyp i, .chapter-stage .verify-checks > div, .chapter-stage .approval-card, .chapter-stage .approval-note { animation-play-state: paused; }
-.chapter.in .chapter-stage .term-line, .chapter.in .chapter-stage .term-result, .chapter.in .chapter-stage .ev, .chapter.in .chapter-stage .hyp, .chapter.in .chapter-stage .hyp i, .chapter.in .chapter-stage .verify-checks > div, .chapter.in .chapter-stage .approval-card, .chapter.in .chapter-stage .approval-note { animation-play-state: running; }
+.chapter-stage .term-line, .chapter-stage .term-result, .chapter-stage .ev, .chapter-stage .hyp, .chapter-stage .hyp i::after, .chapter-stage .verify-checks > div, .chapter-stage .approval-card, .chapter-stage .approval-note, .chapter-stage .path-scene .link-fail, .chapter-stage .path-scene .node-suspect circle { animation-play-state: paused; }
+.chapter.in .chapter-stage .term-line, .chapter.in .chapter-stage .term-result, .chapter.in .chapter-stage .ev, .chapter.in .chapter-stage .hyp, .chapter.in .chapter-stage .hyp i::after, .chapter.in .chapter-stage .verify-checks > div, .chapter.in .chapter-stage .approval-card, .chapter.in .chapter-stage .approval-note, .chapter.in .chapter-stage .path-scene .link-fail, .chapter.in .chapter-stage .path-scene .node-suspect circle { animation-play-state: running; }
 
 .alert-card { position: relative; border: 1px solid #3a3a3a; padding: 22px 24px; background: var(--bg); overflow: hidden; }
 .alert-card .kicker { color: var(--red); }
@@ -1127,10 +1129,10 @@ pre {
 .term-bar { display: flex; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
 .term-bar i { width: 8px; height: 8px; border-radius: 50%; background: #333; }
 .term-bar span { margin-left: auto; color: var(--muted); font-size: 10px; }
-.term-line { display: grid; grid-template-columns: 14px auto 1fr auto; gap: 10px; padding: 3px 14px; color: #9a9a9a; opacity: 0; animation: type .4s steps(1) both; }
+.term-line { display: grid; grid-template-columns: 14px auto 1fr auto; gap: 10px; padding: 3px 14px; color: #9a9a9a; opacity: 0; animation: type .3s ease both; }
 .term-prompt { color: var(--accent); }
 .term-line code { color: var(--text); }
-.term-result { color: var(--accent); opacity: 0; animation: type .3s steps(1) both; }
+.term-result { color: var(--accent); opacity: 0; animation: type .3s ease both; }
 .term-result::before { content: "→ "; color: var(--muted); }
 @keyframes type { to { opacity: 1; } }
 
@@ -1176,6 +1178,8 @@ pre {
   .home .hero-story, .chapter, .chapter:nth-child(even) { grid-template-columns: 1fr; }
   .chapter:nth-child(even) .chapter-text { order: 0; }
   .chapter { padding: 24px; }
+  .workflow div:nth-child(3n) svg { display: none; }
+  .onboarding { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .home *, .home *::before, .home *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
