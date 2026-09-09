@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     fixture_telemetry_url: str = "http://localhost:8001"
     telemetry_timeout_seconds: float = 3
     telemetry_freshness_seconds: int = 60
+    ripe_atlas_base_url: str = "https://atlas.ripe.net/api/v2"
+    ripe_atlas_api_key: str | None = None
+    ripe_atlas_timeout_seconds: float = 5
+    ripe_atlas_freshness_seconds: int = 3600
+    ripe_atlas_ping_measurement_id: int | None = None
+    ripe_atlas_traceroute_measurement_id: int | None = None
+    ripe_atlas_dns_measurement_id: int | None = None
     ripestat_base_url: str = "https://stat.ripe.net/data"
     ripestat_freshness_seconds: int = 43200
     model_config = SettingsConfigDict(env_prefix="RELAY_", env_file=".env")

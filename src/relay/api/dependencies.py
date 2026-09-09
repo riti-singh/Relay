@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from relay.adapters.http_telemetry import HTTPTelemetryAdapter
+from relay.adapters.ripe_atlas import RIPEAtlasAdapter
 from relay.adapters.ripestat import RIPEstatAdapter
 from relay.agent.planner import AgentModel, DeterministicPlanner, OpenAICompatibleAgentModel
 from relay.agent.runtime import AgentRuntime
@@ -68,6 +69,23 @@ def get_incident_service() -> IncidentService:
                 base_url=settings.ripestat_base_url,
                 timeout_seconds=settings.telemetry_timeout_seconds,
                 freshness_seconds=settings.ripestat_freshness_seconds,
+            ),
+            "ripe-atlas": lambda incident: RIPEAtlasAdapter(
+                "ripe-atlas",
+                "RIPE Atlas public measurements",
+                settings.ripe_atlas_base_url,
+                {
+                    kind: measurement_id
+                    for kind, measurement_id in (
+                        ("ping", settings.ripe_atlas_ping_measurement_id),
+                        ("traceroute", settings.ripe_atlas_traceroute_measurement_id),
+                        ("dns", settings.ripe_atlas_dns_measurement_id),
+                    )
+                    if measurement_id is not None
+                },
+                settings.ripe_atlas_api_key,
+                settings.ripe_atlas_timeout_seconds,
+                settings.ripe_atlas_freshness_seconds,
             ),
         },
     )

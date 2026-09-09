@@ -186,6 +186,12 @@ Run `docker compose up --build`; this starts Relay plus a separate fixture telem
 
 The fixture service also has healthy and stale-link datasets. It speaks the external HTTP contract and does not read simulator state.
 
+### RIPE Atlas public measurements
+
+The `ripe-atlas` source reads results of existing public RIPE Atlas measurements and normalizes them into the same observations: `ping` results back reachability and packet loss, `traceroute` results back per-hop RTT, AS path, and the hop where loss or latency begins, and `dns` results back resolution. It never creates or modifies a measurement, and it claims only `REACHABILITY`, `PACKET_LOSS`, and `DNS`.
+
+Point it at the measurement IDs to read (`RELAY_RIPE_ATLAS_PING_MEASUREMENT_ID` and friends in `.env.example`); a diagnostic argument `measurement_id` overrides the configured one. Reads of public measurements need no credentials; `RELAY_RIPE_ATLAS_API_KEY` is optional, backend-only, and never committed.
+
 ## Adding a telemetry adapter
 
 Implement `NetworkAdapter` under `src/relay/adapters`, declare only the capabilities the provider truly supports, and normalize every result into `AdapterObservation` with provenance and a source timestamp. Implement vendor-neutral inventory and topology, register a factory by source ID, and build its registry with `include_writes=False`. `AgentRuntime` needs no provider-specific changes: it receives the same tool schemas and normalized evidence for every adapter.
