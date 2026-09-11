@@ -34,7 +34,6 @@ const scenarioName = (s: string) =>
     "degraded-link": "Congested Link",
     "config-drift": "Configuration Drift",
   })[s] ?? s;
-const workflow = ["Incident", "Investigation", "Diagnostic tools", "Evidence", "Hypothesis", "Root cause", "Human approval", "Remediation", "Verification"];
 function Help({ term, children }: { term: string; children: React.ReactNode }) {
   return (
     <span className="help">
@@ -43,31 +42,7 @@ function Help({ term, children }: { term: string; children: React.ReactNode }) {
     </span>
   );
 }
-export function Home() {
-  const [showGuide, setShowGuide] = useState(() => globalThis.localStorage?.getItem("relay-onboarding-dismissed") !== "true");
-  const dismiss = () => { globalThis.localStorage?.setItem("relay-onboarding-dismissed", "true"); setShowGuide(false); };
-  return (
-    <Page>
-      <section className="hero">
-        <span className="kicker">GUIDED NETWORK INCIDENT RESPONSE</span>
-        <h1>Understand the failure. Approve the change. Verify recovery.</h1>
-        <p>Relay investigates network incidents with diagnostic tools, turns observations into evidence-backed root causes, and keeps every network change behind human approval.</p>
-        <div className="hero-actions"><a className="primary" href="/incidents">Start an investigation <ArrowRight /></a><a href="/incidents">Explore a sample incident</a></div>
-      </section>
-      <section className="workflow" aria-label="Relay investigation workflow">
-        {workflow.map((step, index) => <div key={step}><span>{index + 1}</span><b>{step}</b>{index < workflow.length - 1 && <ArrowRight />}</div>)}
-      </section>
-      {showGuide ? <section className="onboarding panel"><div><span className="kicker">WELCOME TO RELAY</span><h2>Your first investigation</h2></div><ol><li>Choose a simulated network failure.</li><li>Start a deterministic or AI Agent investigation.</li><li>Watch Relay gather evidence and revise hypotheses.</li><li>Review the proposed fix and approve the exact action.</li><li>Watch Relay verify that connectivity recovered.</li></ol><button onClick={dismiss}>Dismiss guide</button></section> : <button className="rediscover" onClick={() => setShowGuide(true)}>Show first-run guide</button>}
-      <div className="explain-grid">
-        <section><h2>Two ways to investigate</h2><p><b>Deterministic mode</b> follows a reproducible decision policy—ideal for demos, tests, and comparing results. <b>AI Agent mode</b> chooses the next safe diagnostic action from the same typed tools. Neither mode can bypass tool validation.</p></section>
-        <section><h2>Autonomous diagnosis, human-controlled change</h2><p>Relay can inspect the network on its own. Before a write, it pauses and fingerprints the exact tool and arguments. Any change invalidates that approval.</p></section>
-        <section><h2>Recovery must be proven</h2><p>Remediation is not success by itself. Relay runs scenario-relevant connectivity checks and resolves the incident only when verification passes.</p></section>
-        <section><h2>Built for evidence, not opaque answers</h2><p>Tool calls, observations, hypotheses, run events, approvals, and verification remain visible and replayable. Hidden model reasoning is never stored.</p></section>
-      </div>
-      <section className="product-areas panel"><h2>Explore Relay</h2><div><a href="/overview"><b>Operations summary</b><span>System-wide operational health</span></a><a href="/incidents"><b>Incident workspace</b><span>Inject failures and investigate</span></a><a href="/topology"><b>Network map</b><span>See devices, links, and evidence</span></a><a href="/runs"><b>Run history</b><span>Replay durable executions</span></a><a href="/evaluations"><b>Quality evaluation</b><span>Measure accuracy and safety</span></a></div></section>
-    </Page>
-  );
-}
+export { Home } from "./home";
 export function Overview() {
   const q = useLoad(() => api.dashboard(), []);
   if (q.error)
@@ -131,34 +106,6 @@ export function Overview() {
               detail="Inject a deterministic scenario to begin."
             />
           )}
-        </section>
-        <section className="panel health">
-          <PanelTitle title="Network health" meta="5 DEVICES · 4 LINKS" />
-          <div className="health-ring">
-            <span>98</span>
-            <small>HEALTH SCORE</small>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="good-dot" />
-              Control plane
-            </span>
-            <b>HEALTHY</b>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="good-dot" />
-              Simulator
-            </span>
-            <b>ONLINE</b>
-          </div>
-          <div className="health-row">
-            <span>
-              <i className="blue-dot" />
-              Planner
-            </span>
-            <b>READY</b>
-          </div>
         </section>
       </div>
     </Page>
@@ -420,7 +367,6 @@ export function IncidentPage() {
           <div className="incident-tags">
             <Status value={incident.status} />
             <Status value={incident.operating_mode ?? "LAB"} />
-            <span>P2 · HIGH</span>
             <span>{scenarioName(incident.scenario)}</span>
           </div>
           <h1>{incident.title}</h1>

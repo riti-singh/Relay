@@ -106,11 +106,11 @@ export function NetworkMap({
         {
           selector: "node",
           style: {
-            "background-color": "#151d27",
-            "border-color": "#526277",
+            "background-color": "#1a1a1a",
+            "border-color": "#5c5c5c",
             "border-width": 2,
             label: "data(label)",
-            color: "#cbd5e1",
+            color: "#d4d4d4",
             "font-size": 12,
             "text-valign": "bottom",
             "text-margin-y": 8,
@@ -122,19 +122,19 @@ export function NetworkMap({
           selector: 'node[kind="service"]',
           style: {
             shape: "round-rectangle",
-            "background-color": "#102b2c",
-            "border-color": "#2dd4bf",
+            "background-color": "#222222",
+            "border-color": "#a3a3a3",
           },
         },
         {
           selector: ".affected",
-          style: { "border-color": "#38bdf8", "border-width": 3 },
+          style: { "border-color": "#fafafa", "border-width": 3 },
         },
         {
           selector: ".suspect",
           style: {
-            "border-color": "#fb923c",
-            "background-color": "#3a2116",
+            "border-color": "#ffffff",
+            "background-color": "#333333",
             "border-width": 4,
           },
         },
@@ -142,14 +142,14 @@ export function NetworkMap({
           selector: "edge",
           style: {
             width: 2,
-            "line-color": "#405064",
-            "target-arrow-color": "#405064",
+            "line-color": "#4a4a4a",
+            "target-arrow-color": "#4a4a4a",
             "target-arrow-shape": "triangle",
             "curve-style": "bezier",
             label: "data(label)",
-            color: "#72839a",
+            color: "#8a8a8a",
             "font-size": 9,
-            "text-background-color": "#0b0f14",
+            "text-background-color": "#0a0a0a",
             "text-background-opacity": 1,
             "text-background-padding": "3px",
           },
@@ -165,7 +165,7 @@ export function NetworkMap({
         {
           selector: ":selected",
           style: {
-            "overlay-color": "#38bdf8",
+            "overlay-color": "#fafafa",
             "overlay-opacity": 0.16,
             "overlay-padding": 10,
           },
