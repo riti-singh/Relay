@@ -25,6 +25,10 @@ class ConnectivityInput(BaseModel):
     destination: str
 
 
+class PrefixInput(BaseModel):
+    resource: str
+
+
 class InterfaceInput(BaseModel):
     device_id: str
     interface_name: str
@@ -104,6 +108,14 @@ class RouteTableTool(Tool[DeviceInput]):
 
     def run(self, inputs: DeviceInput) -> AdapterObservation:
         return self.adapter.collect(DiagnosticOperation.ROUTE_TABLE, inputs.model_dump())
+
+
+class PrefixVisibilityTool(Tool[PrefixInput]):
+    name = "get_prefix_visibility"
+    input_model = PrefixInput
+
+    def run(self, inputs: PrefixInput) -> AdapterObservation:
+        return self.adapter.collect(DiagnosticOperation.PREFIX_VISIBILITY, inputs.model_dump())
 
 
 class DeviceLogsTool(Tool[DeviceInput]):
@@ -247,6 +259,7 @@ def build_registry(
         TopologyTool(adapter),
         InterfaceStatusTool(adapter),
         RouteTableTool(adapter),
+        PrefixVisibilityTool(adapter),
         DeviceLogsTool(adapter),
         DeviceConfigTool(adapter),
         ResolveDNSTool(adapter),

@@ -75,6 +75,11 @@ class DeterministicPlanner:
                     "Inspect observed source route",
                 ),
                 (
+                    "get_prefix_visibility",
+                    {"resource": context.destination_device},
+                    "Check global BGP visibility of the destination prefix",
+                ),
+                (
                     "get_interface_status",
                     {"device_id": "core-01", "interface_name": "eth1"},
                     "Inspect observed uplink",
@@ -155,7 +160,9 @@ class DeterministicPlanner:
             for c in context.recent_tool_calls
         }
         interface = observations.get("get_interface_status", {})
-        route = observations.get("get_route_table", {}).get("routes", {})
+        route_table = observations.get("get_route_table", {})
+        route = route_table.get("routes", {})
+        bgp = observations.get("get_prefix_visibility", {})
         tcp = observations.get("test_tcp_connection", {})
         dns = observations.get("resolve_dns", {})
         acl = observations.get("get_acl_rules", {}).get("rules", [])
@@ -180,7 +187,27 @@ class DeterministicPlanner:
                     {},
                     "OBSERVE mode does not permit remediation",
                 )
-            if route.get(context.destination_device) in {None, "discard"}:
+            prefix = bgp.get("prefix") or context.destination_device
+            if bgp.get("announced") is False or (
+                bgp.get("announced") is True and bgp.get("globally_visible") is False
+            ):
+                withdrawals = (bgp.get("recent_changes") or {}).get("withdrawals", 0)
+                detail = (
+                    f"; {withdrawals} withdrawal(s) seen in the recent BGP update window"
+                    if withdrawals
+                    else ""
+                )
+                return (
+                    f"{prefix} is not globally visible in BGP (origin route withdrawn){detail}",
+                    f"{prefix} origin announcement",
+                    "",
+                    {},
+                    "OBSERVE mode does not permit remediation",
+                )
+            if "routes" in route_table and route.get(context.destination_device) in {
+                None,
+                "discard",
+            }:
                 return (
                     (
                         f"{context.source_device} has an anomalous route to "
@@ -208,6 +235,19 @@ class DeterministicPlanner:
                     "",
                     {},
                     "No remediation required",
+                )
+            if bgp.get("globally_visible") is True:
+                origins = ", ".join(f"AS{asn}" for asn in bgp.get("origin_asns", [])) or "unknown"
+                seen = (bgp.get("visibility") or {}).get("ris_peers_seeing", 0)
+                return (
+                    (
+                        f"{prefix} is globally announced by {origins} ({seen} RIS peers); "
+                        "the fault is in transit or locally, not an origin withdrawal"
+                    ),
+                    f"{context.source_device} -> {prefix} transit path",
+                    "",
+                    {},
+                    "OBSERVE mode does not permit remediation",
                 )
             raise AgentModelError("fresh external telemetry does not identify a root cause")
         if interface.get("admin_up") is False:
