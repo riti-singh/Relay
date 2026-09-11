@@ -67,6 +67,7 @@ export interface Evidence {
     freshness: "FRESH" | "STALE" | "UNAVAILABLE";
     query_identity?: string;
     measurement?: string;
+    source_metadata?: Record<string, unknown>;
   };
   run_id?: string;
 }
