@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     ripe_atlas_dns_measurement_id: int | None = None
     ripestat_base_url: str = "https://stat.ripe.net/data"
     ripestat_freshness_seconds: int = 43200
+    ripestat_allowed_hosts: list[str] = ["stat.ripe.net"]
     model_config = SettingsConfigDict(env_prefix="RELAY_", env_file=".env")
 
 

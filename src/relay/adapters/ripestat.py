@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib import error, parse, request
@@ -19,6 +20,37 @@ from relay.domain.models import (
 )
 
 RESOURCE_ARGUMENTS = ("resource", "prefix", "destination", "device_id", "hostname")
+DEFAULT_BASE_URL = "https://stat.ripe.net/data"
+DEFAULT_ALLOWED_HOSTS = frozenset({"stat.ripe.net"})
+
+
+class RIPEstatConfigurationError(ValueError):
+    """The configured RIPEstat base URL is not an allowlisted public https host."""
+
+
+def validate_base_url(base_url: str, allowed_hosts: Iterable[str] = DEFAULT_ALLOWED_HOSTS) -> str:
+    """Return the normalized base URL, or raise if it could reach anything but public RIPEstat."""
+    allowed = {host.strip().lower() for host in allowed_hosts if host.strip()}
+    if not allowed:
+        raise RIPEstatConfigurationError("RIPEstat allowed hosts list must not be empty")
+    parts = parse.urlsplit(base_url.strip())
+    if parts.scheme != "https":
+        raise RIPEstatConfigurationError(
+            f"RIPEstat base URL must use https, got {parts.scheme or 'no scheme'!r}: {base_url!r}"
+        )
+    if parts.username is not None or parts.password is not None:
+        raise RIPEstatConfigurationError("RIPEstat base URL must not contain credentials")
+    if parts.query or parts.fragment:
+        raise RIPEstatConfigurationError("RIPEstat base URL must not contain a query or fragment")
+    host = (parts.hostname or "").lower()
+    if host not in allowed:
+        raise RIPEstatConfigurationError(
+            f"RIPEstat host {host or '<missing>'!r} is not allowlisted; "
+            f"allowed hosts: {', '.join(sorted(allowed))}"
+        )
+    if parts.port not in (None, 443):
+        raise RIPEstatConfigurationError(f"RIPEstat base URL must use port 443, got {parts.port}")
+    return parse.urlunsplit(("https", host, parts.path.rstrip("/"), "", ""))
 
 
 class RIPEstatAdapter(NetworkAdapter):
@@ -35,14 +67,16 @@ class RIPEstatAdapter(NetworkAdapter):
         self,
         adapter_id: str = "ripestat",
         display_name: str = "RIPEstat BGP visibility",
-        base_url: str = "https://stat.ripe.net/data",
+        base_url: str = DEFAULT_BASE_URL,
         timeout_seconds: float = 5,
         freshness_seconds: int = 43200,
         recent_changes_hours: int = 2,
         source_app: str = "relay-noc",
+        allowed_hosts: Iterable[str] = DEFAULT_ALLOWED_HOSTS,
     ) -> None:
         self.adapter_id, self.display_name = adapter_id, display_name
-        self.base_url = base_url.rstrip("/")
+        self.allowed_hosts = frozenset(host.strip().lower() for host in allowed_hosts)
+        self.base_url = validate_base_url(base_url, self.allowed_hosts)
         self.timeout_seconds, self.freshness_seconds = timeout_seconds, freshness_seconds
         self.recent_changes_hours, self.source_app = recent_changes_hours, source_app
         self.last_successful_observation: datetime | None = None
@@ -143,9 +177,11 @@ class RIPEstatAdapter(NetworkAdapter):
 
     def _url(self, data_call: str, resource: str, **params: str) -> str:
         query = parse.urlencode({"resource": resource, "sourceapp": self.source_app, **params})
-        return f"{self.base_url}/{data_call}/data.json?{query}"
+        return f"{self.base_url}/{parse.quote(data_call, safe='')}/data.json?{query}"
 
     def _get(self, url: str) -> dict[str, Any]:
+        if not url.startswith(f"{self.base_url}/"):
+            raise RIPEstatConfigurationError(f"refusing request outside RIPEstat base: {url!r}")
         with request.urlopen(url, timeout=self.timeout_seconds) as response:
             body = json.loads(response.read())
         if not isinstance(body, dict) or not isinstance(body.get("data"), dict):
