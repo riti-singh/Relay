@@ -27,7 +27,7 @@ class SimulatorNetworkAdapter(NetworkAdapter):
     display_name = "Deterministic network simulator"
     source_type = "simulator"
     read_only = False
-    capabilities = frozenset(AdapterCapability)
+    capabilities = frozenset(AdapterCapability) - {AdapterCapability.BGP_VISIBILITY}
 
     def __init__(self, simulator: NetworkSimulator) -> None:
         self.simulator = simulator
@@ -66,6 +66,19 @@ class SimulatorNetworkAdapter(NetworkAdapter):
             DiagnosticOperation.RECENT_CHANGES: lambda: self._changes(arguments["device_id"]),
         }
         now = datetime.now(UTC)
+        if operation not in handlers:
+            return AdapterObservation(
+                status=ObservationStatus.UNSUPPORTED,
+                provenance=ObservationProvenance(
+                    source_type=self.source_type,
+                    adapter=self.adapter_id,
+                    resource_id=self._resource(arguments),
+                    collected_at=now,
+                    freshness=Freshness.UNAVAILABLE,
+                    query_identity=operation.value,
+                ),
+                message=f"lab simulator does not expose {operation.value.replace('_', ' ')}",
+            )
         return AdapterObservation(
             status=ObservationStatus.SUCCESS,
             data=handlers[operation](),

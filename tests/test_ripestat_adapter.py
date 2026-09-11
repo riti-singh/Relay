@@ -121,8 +121,11 @@ def adapter(freshness: int = 43200) -> RIPEstatAdapter:
 def test_adapter_contract_is_read_only_routes_only() -> None:
     source = adapter()
     assert source.source_type == "ripestat" and source.read_only is True
-    assert source.capabilities == frozenset({AdapterCapability.ROUTES})
+    assert source.capabilities == frozenset(
+        {AdapterCapability.ROUTES, AdapterCapability.BGP_VISIBILITY}
+    )
     assert source.supports(DiagnosticOperation.ROUTE_TABLE)
+    assert source.supports(DiagnosticOperation.PREFIX_VISIBILITY)
     assert not source.supports(DiagnosticOperation.TOPOLOGY)
     assert source.inventory().devices == []
     assert source.topology().devices == []
