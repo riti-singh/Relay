@@ -69,6 +69,7 @@ def get_incident_service() -> IncidentService:
                 base_url=settings.ripestat_base_url,
                 timeout_seconds=settings.telemetry_timeout_seconds,
                 freshness_seconds=settings.ripestat_freshness_seconds,
+                allowed_hosts=settings.ripestat_allowed_hosts,
             ),
             "ripe-atlas": lambda incident: RIPEAtlasAdapter(
                 "ripe-atlas",

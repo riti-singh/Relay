@@ -10,6 +10,7 @@ import pytest
 
 from relay.adapters import RIPEstatAdapter
 from relay.adapters.base import DiagnosticOperation
+from relay.adapters.ripestat import RIPEstatConfigurationError
 from relay.domain.models import AdapterCapability, Freshness, ObservationStatus
 
 PREFIX = "193.0.0.0/21"
@@ -254,6 +255,96 @@ def test_malformed_paths(
     result = adapter().collect(DiagnosticOperation.ROUTE_TABLE, {"prefix": PREFIX})
     assert result.status is ObservationStatus.FAILED
     assert result.message and "malformed" in result.message
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://stat.ripe.net/data",
+        "https://127.0.0.1/data",
+        "https://10.0.0.5:8443/data",
+        "https://169.254.169.254/latest/meta-data",
+        "https://localhost/data",
+        "https://stat.ripe.net.evil.example/data",
+        "https://user:pw@stat.ripe.net/data",
+        "https://stat.ripe.net:8080/data",
+        "https://stat.ripe.net/data?x=1",
+        "stat.ripe.net/data",
+        "file:///etc/passwd",
+    ],
+)
+def test_disallowed_base_url_is_rejected_at_construction(base_url: str) -> None:
+    with pytest.raises(RIPEstatConfigurationError):
+        RIPEstatAdapter(base_url=base_url)
+
+
+def test_custom_allowlist_rejects_default_host_and_accepts_listed_one() -> None:
+    with pytest.raises(RIPEstatConfigurationError, match="not allowlisted"):
+        RIPEstatAdapter(base_url="https://stat.ripe.net/data", allowed_hosts=["mirror.example"])
+    source = RIPEstatAdapter(
+        base_url="https://MIRROR.example/data/", allowed_hosts=["mirror.example"]
+    )
+    assert source.base_url == "https://mirror.example/data"
+    with pytest.raises(RIPEstatConfigurationError, match="must not be empty"):
+        RIPEstatAdapter(allowed_hosts=[])
+
+
+def test_default_public_host_still_works_with_mocked_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = install_ripestat(
+        monkeypatch,
+        {
+            "routing-status": routing_status(),
+            "prefix-overview": prefix_overview(),
+            "bgp-updates": bgp_updates(),
+        },
+    )
+    result = RIPEstatAdapter().collect(DiagnosticOperation.ROUTE_TABLE, {"resource": PREFIX})
+    assert result.status is ObservationStatus.SUCCESS
+    assert all(
+        parse.urlsplit(url).scheme == "https" and parse.urlsplit(url).hostname == "stat.ripe.net"
+        for url in calls
+    )
+    assert result.provenance.source_metadata["routing_status_url"].startswith(
+        "https://stat.ripe.net/data/routing-status/data.json?"
+    )
+
+
+def test_get_refuses_urls_outside_validated_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = install_ripestat(monkeypatch, {})
+    with pytest.raises(RIPEstatConfigurationError, match="outside RIPEstat base"):
+        adapter()._get("https://10.0.0.5/routing-status/data.json?resource=1.1.1.1")
+    assert calls == []
+
+
+def test_settings_allowlist_rejects_internal_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    from relay.api import dependencies
+    from relay.config import Settings
+    from relay.domain.models import Incident
+
+    incident = Incident(
+        title="bgp",
+        description="probe",
+        source_device="198.51.100.10",
+        destination_device="193.0.0.1",
+        data_source_ids=["ripestat"],
+    )
+
+    monkeypatch.setattr(
+        dependencies,
+        "get_settings",
+        lambda: Settings(
+            database_path=":memory:",
+            seed_demo_data=False,
+            ripestat_base_url="https://10.0.0.5/data",
+        ),
+    )
+    dependencies.get_incident_service.cache_clear()
+    service = dependencies.get_incident_service()
+    with pytest.raises(RIPEstatConfigurationError, match="not allowlisted"):
+        service.adapter_factories["ripestat"](incident)
+    dependencies.get_incident_service.cache_clear()
 
 
 def test_registered_in_incident_service_factories(monkeypatch: pytest.MonkeyPatch) -> None:
