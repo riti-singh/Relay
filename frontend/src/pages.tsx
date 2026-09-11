@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
+  ExternalLink,
   Info,
   Play,
   Plus,
@@ -476,19 +477,19 @@ export function IncidentPage() {
             meta={`${incident.evidence.length} OBSERVATIONS`}
           />
           {incident.evidence.length ? incident.evidence.map((e) => (
-            <button key={e.id} onClick={() => setSelected(component(e))}>
-              <span>{fmtTime(e.recorded_at)}</span>
-              <b>{e.summary}</b>
-              <small>
-                {Object.entries(e.observation)
-                  .slice(0, 2)
-                  .map(([k, v]) => `${k}: ${String(v)}`)
-                  .join(" · ")}
-              </small>
-              {e.provenance && <span className={`provenance ${e.provenance.freshness.toLowerCase()}`}>
-                {e.provenance.adapter} · {e.status} · {e.provenance.resource_id ?? "network"} · {e.provenance.observed_at ? `observed ${fmtTime(e.provenance.observed_at)}` : "not observed"}
-              </span>}
-            </button>
+            <div className="evidence-row" key={e.id}>
+              <button onClick={() => setSelected(component(e))}>
+                <span>{fmtTime(e.recorded_at)}</span>
+                <b>{e.summary}</b>
+                <small>
+                  {Object.entries(e.observation)
+                    .slice(0, 2)
+                    .map(([k, v]) => `${k}: ${String(v)}`)
+                    .join(" · ")}
+                </small>
+              </button>
+              {e.provenance && <Provenance evidence={e} />}
+            </div>
           )) : <Empty title="No evidence yet" detail="Evidence appears here as diagnostic tools complete." />}
         </section>
         <section className="panel hypotheses">
@@ -533,6 +534,59 @@ export function IncidentPage() {
       )}
       <Verification incident={incident} />
     </Page>
+  );
+}
+const metaString = (m: Record<string, unknown>, key: string) =>
+  typeof m[key] === "string" ? (m[key] as string) : undefined;
+const metaNumber = (m: Record<string, unknown>, key: string) =>
+  typeof m[key] === "number" ? (m[key] as number) : undefined;
+function SourceLink({ href, children }: { href?: string; children: React.ReactNode }) {
+  if (!href) return null;
+  return (
+    <a className="source-link" href={href} target="_blank" rel="noopener noreferrer">
+      {children} <ExternalLink />
+    </a>
+  );
+}
+function Provenance({ evidence }: { evidence: Evidence }) {
+  const p = evidence.provenance!;
+  const m = p.source_metadata ?? {};
+  const measurementUrl = metaString(m, "measurement_url");
+  const probesTotal = metaNumber(m, "probes_total");
+  const probesAffected = metaNumber(m, "probes_affected");
+  const ripestat: Array<[string, string | undefined]> = [
+    ["Routing status", metaString(m, "routing_status_url")],
+    ["Prefix overview", metaString(m, "prefix_overview_url")],
+    ["BGP updates", metaString(m, "bgp_updates_url")],
+  ];
+  const hasRipestat = ripestat.some(([, href]) => href);
+  return (
+    <div className={`provenance ${p.freshness.toLowerCase()}`} aria-label="Evidence provenance">
+      <span className="provenance-tags">
+        <Status value={p.freshness} />
+        {evidence.status && <Status value={evidence.status} />}
+        <span>{p.source_type}</span>
+        <span>{p.adapter}</span>
+        {p.resource_id && <span>{p.resource_id}</span>}
+        <span>{p.observed_at ? `observed ${fmtTime(p.observed_at)}` : "not observed"}</span>
+      </span>
+      {(measurementUrl || probesTotal !== undefined || hasRipestat) && (
+        <span className="provenance-links">
+          {measurementUrl && (
+            <SourceLink href={measurementUrl}>
+              RIPE Atlas measurement{m.measurement_id !== undefined ? ` ${String(m.measurement_id)}` : ""}
+            </SourceLink>
+          )}
+          {probesTotal !== undefined && (
+            <span>{probesAffected ?? 0} / {probesTotal} probes affected</span>
+          )}
+          {hasRipestat && <span>verify in RIPEstat:</span>}
+          {ripestat.map(([label, href]) => (
+            <SourceLink key={label} href={href}>{label}</SourceLink>
+          ))}
+        </span>
+      )}
+    </div>
   );
 }
 const progressIndex = (status: string) => ({ OPEN: 0, INVESTIGATING: 2, BLOCKED: 2, FAILED: 2, AWAITING_APPROVAL: 4, REMEDIATING: 5, VERIFYING: 6, RESOLVED: 6 } as Record<string, number>)[status] ?? 0;

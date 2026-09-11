@@ -182,4 +182,116 @@ describe("data views", () => {
       ),
     );
   });
+  it("renders evidence provenance with freshness badges and reproducible source links", async () => {
+    const now = new Date().toISOString();
+    const incident = {
+      id: "case-2",
+      title: "Prefix unreachable",
+      description: "Public reachability degraded",
+      source_device: "probes",
+      destination_device: "193.0.14.129",
+      scenario: "observe-ripe",
+      operating_mode: "OBSERVE",
+      status: "INVESTIGATING",
+      created_at: now,
+      updated_at: now,
+      investigation_plan: [],
+      investigation_summary: "",
+      investigation_runs: [],
+      actions: [],
+      events: [],
+      tool_calls: [],
+      evidence: [
+        {
+          id: "e-atlas",
+          tool_call_id: "t1",
+          summary: "Ping loss observed from 7 of 10 probes",
+          observation: { target: "193.0.14.129", loss_percent: 70 },
+          is_verification: false,
+          recorded_at: now,
+          status: "SUCCESS",
+          provenance: {
+            source_type: "ripe_atlas",
+            adapter: "ripe-atlas",
+            resource_id: "193.0.14.129",
+            observed_at: now,
+            collected_at: now,
+            freshness: "FRESH",
+            measurement: "ping",
+            source_metadata: {
+              measurement_id: 1001,
+              measurement_type: "ping",
+              measurement_url: "https://atlas.ripe.net/measurements/1001/",
+              probes_total: 10,
+              probes_affected: 7,
+            },
+          },
+        },
+        {
+          id: "e-stat",
+          tool_call_id: "t2",
+          summary: "Prefix visibility dropped in BGP",
+          observation: { prefix: "193.0.0.0/21" },
+          is_verification: false,
+          recorded_at: now,
+          status: "STALE",
+          provenance: {
+            source_type: "ripestat",
+            adapter: "ripestat-composite",
+            resource_id: "193.0.0.0/21",
+            observed_at: now,
+            collected_at: now,
+            freshness: "STALE",
+            source_metadata: {
+              routing_status_url: "https://stat.ripe.net/data/routing-status/data.json?resource=193.0.0.0/21",
+              prefix_overview_url: "https://stat.ripe.net/data/prefix-overview/data.json?resource=193.0.0.0/21",
+              bgp_updates_url: "https://stat.ripe.net/data/bgp-updates/data.json?resource=193.0.0.0/21",
+            },
+          },
+        },
+      ],
+      hypotheses: [],
+      remediation_history: [],
+      approval_state: "NONE",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/capabilities"))
+        return new Response(
+          JSON.stringify({ deterministic_planner: true, ai_planner: false, max_investigation_steps: 20 }),
+          { status: 200 },
+        );
+      if (url.includes("/network/topology"))
+        return new Response(JSON.stringify({ devices: [], links: [] }), { status: 200 });
+      return new Response(JSON.stringify(incident), { status: 200 });
+    });
+    render(
+      <MemoryRouter initialEntries={["/incidents/case-2"]}>
+        <Routes>
+          <Route path="/incidents/:id" element={<IncidentPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText("Ping loss observed from 7 of 10 probes");
+    const atlas = screen.getByRole("link", { name: /RIPE Atlas measurement 1001/ });
+    expect(atlas).toHaveAttribute("href", "https://atlas.ripe.net/measurements/1001/");
+    expect(atlas).toHaveAttribute("target", "_blank");
+    expect(screen.getByText("7 / 10 probes affected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Routing status/ })).toHaveAttribute(
+      "href",
+      expect.stringContaining("stat.ripe.net/data/routing-status"),
+    );
+    expect(screen.getByRole("link", { name: /Prefix overview/ })).toHaveAttribute(
+      "href",
+      expect.stringContaining("stat.ripe.net"),
+    );
+    expect(screen.getByRole("link", { name: /BGP updates/ })).toHaveAttribute(
+      "href",
+      expect.stringContaining("stat.ripe.net"),
+    );
+    expect(screen.getByText("FRESH")).toHaveClass("status", "s-fresh");
+    expect(screen.getAllByText("STALE").some((el) => el.classList.contains("s-stale"))).toBe(true);
+    expect(screen.getByText("ripe_atlas")).toBeInTheDocument();
+    expect(screen.getByText("ripestat")).toBeInTheDocument();
+  });
 });
