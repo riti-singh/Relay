@@ -16,6 +16,7 @@ import { api } from "./api";
 import {
   Empty,
   ErrorState,
+  fmtDateTime,
   fmtTime,
   Inspector,
   NetworkMap,
@@ -568,7 +569,7 @@ function Provenance({ evidence }: { evidence: Evidence }) {
         <span>{p.source_type}</span>
         <span>{p.adapter}</span>
         {p.resource_id && <span>{p.resource_id}</span>}
-        <span>{p.observed_at ? `observed ${fmtTime(p.observed_at)}` : "not observed"}</span>
+        <span>{p.observed_at ? `observed ${fmtDateTime(p.observed_at)}` : "not observed"}</span>
       </span>
       {(measurementUrl || probesTotal !== undefined || hasRipestat) && (
         <span className="provenance-links">

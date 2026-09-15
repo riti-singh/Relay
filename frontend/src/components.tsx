@@ -16,6 +16,15 @@ export const fmtTime = (v: string) =>
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(v));
+export const fmtDateTime = (v: string) =>
+  new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(v));
 export const pct = (v: number) => `${Math.round(v * 100)}%`;
 export function Status({ value }: { value: string }) {
   return (
