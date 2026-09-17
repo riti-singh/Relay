@@ -13,6 +13,7 @@ class DiagnosticOperation(StrEnum):
     TRACEROUTE = "traceroute"
     INTERFACE_STATUS = "interface_status"
     ROUTE_TABLE = "route_table"
+    PREFIX_VISIBILITY = "prefix_visibility"
     DEVICE_LOGS = "device_logs"
     DEVICE_CONFIG = "device_config"
     RESOLVE_DNS = "resolve_dns"
@@ -30,6 +31,7 @@ OPERATION_CAPABILITY: dict[DiagnosticOperation, AdapterCapability] = {
     DiagnosticOperation.TRACEROUTE: AdapterCapability.REACHABILITY,
     DiagnosticOperation.INTERFACE_STATUS: AdapterCapability.INTERFACE_STATE,
     DiagnosticOperation.ROUTE_TABLE: AdapterCapability.ROUTES,
+    DiagnosticOperation.PREFIX_VISIBILITY: AdapterCapability.BGP_VISIBILITY,
     DiagnosticOperation.DEVICE_LOGS: AdapterCapability.RECENT_CHANGES,
     DiagnosticOperation.DEVICE_CONFIG: AdapterCapability.CONFIGURATION,
     DiagnosticOperation.RESOLVE_DNS: AdapterCapability.DNS,

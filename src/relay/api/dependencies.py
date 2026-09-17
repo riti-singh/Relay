@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from relay.adapters.http_telemetry import HTTPTelemetryAdapter
 from relay.adapters.ripe_atlas import RIPEAtlasAdapter
+from relay.adapters.ripestat import RIPEstatAdapter
 from relay.agent.planner import AgentModel, DeterministicPlanner, OpenAICompatibleAgentModel
 from relay.agent.runtime import AgentRuntime
 from relay.config import get_settings
@@ -63,6 +64,11 @@ def get_incident_service() -> IncidentService:
                 external_capabilities,
                 settings.telemetry_timeout_seconds,
                 settings.telemetry_freshness_seconds,
+            ),
+            "ripestat": lambda incident: RIPEstatAdapter(
+                base_url=settings.ripestat_base_url,
+                timeout_seconds=settings.telemetry_timeout_seconds,
+                freshness_seconds=settings.ripestat_freshness_seconds,
             ),
             "ripe-atlas": lambda incident: RIPEAtlasAdapter(
                 "ripe-atlas",

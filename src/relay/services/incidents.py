@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import builtins
+import ipaddress
 from collections.abc import Callable
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any, cast
 from uuid import UUID
 
-from relay.adapters.base import NetworkAdapter
+from relay.adapters.base import CompositeNetworkAdapter, NetworkAdapter
 from relay.agent.planner import AgentModel, DeterministicPlanner, InvestigationPlanner
 from relay.agent.runtime import AgentRuntime, action_fingerprint
 from relay.domain.models import (
@@ -35,6 +36,14 @@ from relay.tools.registry import ToolRegistry
 
 class IncidentNotFoundError(LookupError):
     pass
+
+
+def _is_ip_resource(value: str) -> bool:
+    try:
+        ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return False
+    return True
 
 
 class IncidentService:
@@ -85,7 +94,12 @@ class IncidentService:
         self._incident_runtimes[incident.id] = (registry, runtime)
         topology = registry.adapter.topology()
         device_ids = {device.id for device in topology.devices}
-        unknown = {source_device, destination_device} - device_ids
+        unknown = {
+            endpoint
+            for endpoint in (source_device, destination_device)
+            if endpoint not in device_ids
+            and not (operating_mode is OperatingMode.OBSERVE and _is_ip_resource(endpoint))
+        }
         if unknown:
             raise ValueError(f"unknown incident device(s): {', '.join(sorted(unknown))}")
         self.repository.save(incident)
@@ -393,13 +407,18 @@ class IncidentService:
         if incident.operating_mode is OperatingMode.OBSERVE:
             from relay.tools.network_tools import build_registry
 
-            source_id = incident.data_source_ids[0]
-            factory = self.adapter_factories.get(source_id)
-            if factory is None:
-                raise ValueError(f"unknown OBSERVE data source: {source_id}")
-            registry = build_registry(
-                factory(incident), self.registry.max_retries, include_writes=False
+            adapters: list[NetworkAdapter] = []
+            for source_id in incident.data_source_ids:
+                factory = self.adapter_factories.get(source_id)
+                if factory is None:
+                    raise ValueError(f"unknown OBSERVE data source: {source_id}")
+                adapters.append(factory(incident))
+            adapter = (
+                adapters[0]
+                if len(adapters) == 1
+                else CompositeNetworkAdapter("+".join(incident.data_source_ids), adapters)
             )
+            registry = build_registry(adapter, self.registry.max_retries, include_writes=False)
         elif not self._base_claimed and self.registry.simulator.scenario == incident.scenario:
             self._base_claimed = True
             registry = self.registry
