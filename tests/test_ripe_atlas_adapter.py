@@ -67,7 +67,17 @@ def traceroute_results() -> list[dict[str, Any]]:
                 {"hop": 2, "result": [{"from": "10.0.1.1", "rtt": 2.0, "as": 64501}]},
                 {"hop": 3, "result": [{"x": "*"}, {"from": "10.0.2.1", "rtt": 90.0}]},
             ],
-        }
+        },
+        {
+            "prb_id": 22,
+            "timestamp": epoch(),
+            "dst_name": "payments.example.net",
+            "result": [
+                {"hop": 1, "result": [{"from": "10.0.0.1", "rtt": 1.1, "as": 64500}]},
+                {"hop": 2, "result": [{"from": "10.0.1.1", "rtt": 2.1, "as": 64501}]},
+                {"hop": 3, "result": [{"x": "*"}, {"x": "*"}, {"from": "10.0.2.1", "rtt": 90.0}]},
+            ],
+        },
     ]
 
 
@@ -183,7 +193,10 @@ def test_traceroute_normalizes_hops_and_flags_loss(monkeypatch: pytest.MonkeyPat
     assert result.data["first_loss_hop"] == 3
     assert result.data["first_latency_increase_hop"] == 3
     assert result.data["hops"][2]["rtt_avg_ms"] == 90.0
+    assert result.data["hops"][2]["timeouts"] == 3
     assert result.provenance.measurement == "5010"
+    assert result.provenance.source_metadata["probes_total"] == 2
+    assert result.provenance.source_metadata["probes_affected"] == 2
 
 
 def test_dns_normalization(monkeypatch: pytest.MonkeyPatch) -> None:

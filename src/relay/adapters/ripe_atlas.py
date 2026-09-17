@@ -229,7 +229,9 @@ def _normalize_traceroute(
     results: Sequence[Mapping[str, Any]],
 ) -> tuple[dict[str, Any], datetime, int, int]:
     hops: dict[int, dict[str, Any]] = {}
+    affected_probes = 0
     for result in results:
+        probe_timed_out = False
         for hop in result.get("result", []):
             if not isinstance(hop, dict):
                 continue
@@ -240,6 +242,7 @@ def _normalize_traceroute(
             for reply in _hop_replies(hop):
                 if "rtt" not in reply:
                     entry["timeouts"] += 1
+                    probe_timed_out = True
                     continue
                 entry["rtts"].append(float(reply["rtt"]))
                 address = reply.get("from")
@@ -248,6 +251,7 @@ def _normalize_traceroute(
                 asn = reply.get("as") or reply.get("asn")
                 if asn is not None and asn not in entry.setdefault("as_path", []):
                     entry["as_path"].append(asn)
+        affected_probes += int(probe_timed_out)
     ordered = [hops[key] for key in sorted(hops)]
     if not ordered:
         raise ValueError("traceroute results contain no hops")
@@ -276,8 +280,7 @@ def _normalize_traceroute(
         "first_loss_hop": first_loss_hop,
         "first_latency_increase_hop": first_latency_increase_hop,
     }
-    affected = sum(1 for hop in normalized_hops if hop["timeouts"] > 0)
-    return data, _observed_at(results), len(results), affected
+    return data, _observed_at(results), len(results), affected_probes
 
 
 def _first_latency_increase(hops: Sequence[Mapping[str, Any]], factor: float = 2.0) -> int | None:

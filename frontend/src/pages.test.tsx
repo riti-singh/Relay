@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Evaluations, Home, IncidentPage, Incidents } from "./pages";
+import { fmtDateTime } from "./components";
 vi.mock("cytoscape", () => ({
   default: vi.fn(() => ({
     on: vi.fn(),
@@ -184,6 +185,7 @@ describe("data views", () => {
   });
   it("renders evidence provenance with freshness badges and reproducible source links", async () => {
     const now = new Date().toISOString();
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString();
     const incident = {
       id: "case-2",
       title: "Prefix unreachable",
@@ -214,7 +216,7 @@ describe("data views", () => {
             source_type: "ripe_atlas",
             adapter: "ripe-atlas",
             resource_id: "193.0.14.129",
-            observed_at: now,
+            observed_at: yesterday,
             collected_at: now,
             freshness: "FRESH",
             measurement: "ping",
@@ -293,5 +295,9 @@ describe("data views", () => {
     expect(screen.getAllByText("STALE").some((el) => el.classList.contains("s-stale"))).toBe(true);
     expect(screen.getByText("ripe_atlas")).toBeInTheDocument();
     expect(screen.getByText("ripestat")).toBeInTheDocument();
+    expect(
+      screen.getByText(`observed ${fmtDateTime(yesterday)}`),
+    ).toBeInTheDocument();
+    expect(fmtDateTime(yesterday)).not.toBe(fmtDateTime(now));
   });
 });
